@@ -1,0 +1,47 @@
+﻿---
+title: "Finfish Mortality REM/PEM Modular Analysis"
+author: "Moriarty et al."
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+source("R/00_packages.R")
+```
+
+# Data Ingest And Preparation
+
+```{r data-ingest}
+source("R/01_data_ingest_prepare.R")
+```
+
+# Data Exploration
+
+```{r data-exploration}
+source("R/02_data_exploration.R")
+```
+
+# Data Analysis
+
+```{r data-analysis}
+source("R/03_data_analysis.R")
+```
+
+# 95 Percent Model Outputs
+
+```{r model-95}
+source("R/04_model_95_percent.R")
+source("R/05_plotting.R")
+if (exists("salmon_df_joined_2018") && exists("salmon_df_active")) {
+  salmon_df_joined_2018 <- calculate_final_mortality_rate(salmon_df_joined_2018)
+  rem_model <- fit_rem_model_95(salmon_df_joined_2018, baseline_df = salmon_df_active)
+  rem_model$threshold_95
+  rem_model$site_summary
+}
+```

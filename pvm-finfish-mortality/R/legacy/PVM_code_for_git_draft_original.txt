@@ -1,0 +1,3750 @@
+---
+title: "Moriarty et al. FinFish Mortality - data, figures and tables"
+author: "Dr. M. Moriarty - for peer review publication"
+date: "r Sys.Date()"
+output:
+  word_document:
+    toc: true
+    toc_depth: '3'
+  #  html_document: null
+    number_sections: true
+    fig_caption: true
+    df_print: paged
+  #  theme: readable
+  #html_document:
+  #  toc: true
+  #  toc_depth: '3'
+  #  df_print: paged
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(kableExtra)
+library(zoo)
+library(forecast)
+library(scales)
+library(webshot)
+library(data.table)
+library(gt)
+library(flextable)
+library(ggplot2)
+library(zoo)
+library(qcc)
+library(dplyr)
+library(forcats)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(mgcv)
+library(purrr)
+scales::percent_format
+#webshot::install_phantomjs()
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+```
+
+# Load and Prepare Data
+### Industry data is published online.
+pc.dat = Salmon Scotland data with ai inference used to group free text into 5 cats
+
+```{r load-salmon-scot-data, echo=FALSE}
+#SalScot - 
+pc.dat <- read.csv("C:/Users/MoriartyM/Documents/Benchmark_Losses/data/Mortality_data_for_full_production_cycles_2018-2024_v2.csv")
+pc.dat$date <- dmy(pc.dat$date)
+#pc.dat <- pc.dat %>% filter(prod_cycle_len >11 | prod_cycle_len <21 ) #SI recokns this is not required
+
+```
+### SGMD data
+The MD fhi compile this information on mortality, this is the most up to date version (May 2025) with the ai inference used to group free text into 6 cats in current version
+```{r load-and-prep-fhi-data, echo=FALSE}
+
+# fhi data
+
+fhi_data <-  read.csv("C:/Users/MoriartyM/Documents/Benchmark_Losses/data/FHI 066 Mortality events 16092025_grouped_causes.csv")
+                      
+                      #MRT_copy_17-6-10.40_withAIinference_on_MortCat_weights_fixed.csv")
+
+# drop irrelevan cols
+cols_to_drop <- c(
+ "Entered.by.Inspector" , "Data.checked..2025.onwards.", "Reporting.Business.No")
+
+# sort out chr cols
+
+fhi_data <- fhi_data %>%
+  mutate(
+    Mortality_rate_clean = Mortality.rate.recorded... %>%
+      gsub("%", "", .) %>%               # remove % if present
+      trimws() %>%                       # remove leading/trailing whitespace
+      na_if("") %>%                      # convert empty strings to NA
+      as.numeric()                       # convert to numeric
+  )
+
+fhi_data <- fhi_data %>%
+  mutate(
+    Total_mortality_clean = Total.mortality.during.event %>%
+      gsub(",", "", .) %>%              # remove thousands separator
+      trimws() %>%                      # trim whitespace
+      na_if("") %>%                     # convert empty strings to NA
+      as.numeric()                      # convert to numeric
+  )
+
+fhi_clean <- fhi_data %>%
+  select(-all_of(cols_to_drop))
+
+#filter for sal and seawater
+fhi_clean <- fhi_clean %>%
+  filter(Species == "SAL" & Water.Type =="SW")
+
+fhi_clean <- fhi_clean %>%
+  mutate(
+    Total_mortality_during_event = gsub(",", "", Total.mortality.during.event),
+    Total_mortality_during_event = as.numeric(trimws(Total.mortality.during.event))
+  )
+
+extract_numeric_grams <- function(x) {
+  x <- tolower(x)
+  x <- gsub("[^0-9\\.kgmg<>]", "", x)  # Remove unexpected text
+  x <- gsub("<", "", x)
+  # Convert kg → g
+  if (grepl("kg", x)) {
+    as.numeric(gsub("kg", "", x)) * 1000
+  } else if (grepl("g", x)) {
+    as.numeric(gsub("g", "", x))
+  } else {
+    as.numeric(x)
+  }
+}
+
+fhi_clean <- fhi_clean %>%
+  mutate(
+    Size_of_fish_g = sapply(Size.of.fish, extract_numeric_grams),
+    Avg_weight_affected_pop_g = sapply(Average.weight.of.affected.population, extract_numeric_grams)
+  )
+#glimpse(fhi_clean)
+#summary(fhi_clean$Total_mortality_during_event)
+fhi_clean$Date.reported <- dmy(fhi_clean$Date.reported)
+fhi_clean$Start.Date <- dmy(fhi_clean$Start.Date)
+fhi_clean$End.Date <- dmy(fhi_clean$End.Date)
+str(fhi_clean$Date.reported)
+fhi_clean <- fhi_clean %>%
+  mutate(
+    #Date_reported = dmy(Date.reported),
+    year_RD = year(Date.reported),
+    month_RD = month(Date.reported),
+    site_number = SiteNo
+  )
+fhi_clean <- fhi_clean %>%
+  mutate(
+   # Start_Date = dmy(Start.Date),
+    year_SD = year(Start.Date),
+    month_SD = month(Start.Date),
+  )
+str(fhi_clean[, c("site_number", "year_SD", "month_SD")])
+fhi_clean <- fhi_clean %>%
+  mutate(
+   # End_Date = dmy(End.Date),
+    year_ED = year(End.Date),
+    month_ED = month(End.Date),
+  )
+
+fhi_clean <- fhi_clean %>%
+  mutate(
+   # Start_Date = dmy(Start.Date),
+    year = year(Start.Date),
+    month = month(Start.Date),
+  )
+
+str(fhi_clean[, c("site_number", "year", "month")])
+#plot(fhi_clean$Start_Date, fhi_clean$Date_reported)
+#plot(fhi_clean$Start_Date, fhi_clean$End_Date, col="red")
+#print(summary(fhi_clean$year_ED == fhi_clean$year_SD))
+end_year_is_different<-subset(fhi_clean, !(fhi_clean$year_ED == fhi_clean$year_SD))
+write.csv(end_year_is_different, "end_year_is_different_fhi.csv")
+#print(summary(fhi_clean$month_ED == fhi_clean$month_SD))
+end_month_is_different<-subset(fhi_clean, !(fhi_clean$month_ED == fhi_clean$month_SD))
+write.csv(end_month_is_different, "end_month_is_different_fhi.csv")
+end_date_earlier_than_start_date<- subset(fhi_clean, End.Date<Start.Date)
+write.csv(end_date_earlier_than_start_date, "end_date_earlier_than_start_date.csv")
+
+#summary(fhi_clean)
+fhi_monthly_summary <- fhi_clean %>%
+  group_by(site_number, year, month) %>%
+  summarise(
+    n_events_fhi = n(),
+    average_size_of_fish_g_fhi = mean(Avg_weight_affected_pop_g, na.rm=TRUE),
+    mortality_rate_average_fhi = mean(Mortality_rate_clean, na.rm=TRUE),
+    mortality_rate_cumulative_fhi = sum(Mortality_rate_clean, na.rm=TRUE),
+    total_mortality_rate_fhi = sum(Mortality_rate_clean, na.rm=TRUE),
+    total_reported_mortality_fhi = sum(Total_mortality_during_event, na.rm = TRUE),
+    top_cause_1 = paste0(unique(Grouped_Mortality_Cause_1[Grouped_Mortality_Cause_1!= ""]), collapse = "; "),
+    top_cause_2 = paste0(unique(Grouped_Mortality_Cause_2[Grouped_Mortality_Cause_2!= ""]), collapse = "; "),
+    top_cause_3 = paste0(unique(Grouped_Mortality_Cause_3[Grouped_Mortality_Cause_3!= ""]), collapse = "; "),
+    action = paste0(unique(Production_to_Harvest_or_Cull[Production_to_Harvest_or_Cull!= ""]), collapse = "; "),
+    .groups = "drop"
+  )
+
+fhi_data_clean <- fhi_clean %>%
+ select(SiteNo,Date.reported, Start.Date, End.Date, reasons_1 = Grouped_Mortality_Cause_1, reasons_2 = Grouped_Mortality_Cause_2, reasons_3 = Grouped_Mortality_Cause_3,action= Production_to_Harvest_or_Cull)
+
+fhi_clean$site_number <- fhi_clean$SiteNo
+fhi_clean$startdate <- dmy(fhi_clean$Start.Date) # Convert factor to date
+fhi_clean$year <- (fhi_clean$year_SD)
+fhi_clean$month <- (fhi_clean$month_SD)
+
+
+# create extra output with further FHI information for SJ's checks
+fhi_monthly_summary_plus <- fhi_clean %>%
+  group_by(site_number, year, month) %>%
+  summarise(
+    n_events_fhi = n(),
+    average_size_of_fish_g_fhi = mean(Avg_weight_affected_pop_g, na.rm=TRUE),
+    mortality_rate_average_fhi = mean(Mortality_rate_clean, na.rm=TRUE),
+    mortality_rate_cumulative_fhi = sum(Mortality_rate_clean, na.rm=TRUE),
+    total_mortality_rate_fhi = sum(Mortality_rate_clean, na.rm=TRUE),
+    total_reported_mortality_fhi = sum(Total_mortality_during_event, na.rm = TRUE),
+    top_cause_1 = paste0(unique(Grouped_Mortality_Cause_1[Grouped_Mortality_Cause_1 != ""]), collapse = "; "),
+    top_cause_2 = paste0(unique(Grouped_Mortality_Cause_2[Grouped_Mortality_Cause_2 != ""]), collapse = "; "),
+    top_cause_3 = paste0(unique(Grouped_Mortality_Cause_3[Grouped_Mortality_Cause_3 != ""]), collapse = "; "),
+    action = paste0(unique(Production_to_Harvest_or_Cull[Production_to_Harvest_or_Cull != ""]), collapse = "; "),
+    All_Mortality_Event_No = paste0(unique(Mortality.Event.No[Mortality.Event.No != ""]), collapse = "; "),
+    Weekly_or_5_weekly = paste0(unique(Weekly.or.5.weekly.[Weekly.or.5.weekly. != ""]), collapse = "; "),
+    Freetext_reasons = paste0(unique(Explained..reasons[Explained..reasons != ""]), collapse = "; "),
+    Freetext_unexplained_obs = paste0(unique(Unexplained.observations[Unexplained.observations != ""]), collapse = "; "),
+    Freetext_Additional_info = paste0(unique(Additional.information[Additional.information != ""]), collapse = "; "),
+    Freetext_action_taken_fhi = paste0(unique(Action.taken.by.FHI[Action.taken.by.FHI != ""]), collapse = "; "),
+    .groups = "drop"
+  )
+
+rm(fhi_data, end_date_earlier_than_start_date, end_month_is_different,     end_year_is_different, fhi_data_clean, fhi_monthly_summary, cols_to_drop)
+```
+# SEPA data 
+dat = SEPA data (2002-2024), subsets taken of salmon data which likely contains cleanerfish of ~ 2.5% in the biomass (we've previously published this information in earlier mortality analysis)
+```{r load-and-prep-sepa-data, echo=FALSE}
+dat <- read.csv("C:/Users/MoriartyM/Documents/Benchmark_Losses/data/SEPA_mortality_all_data.csv")
+dat$date <- dmy(dat$year) # Convert factor to date
+dat$year <- year(dat$date)
+dat$month <- month(dat$date)#, label = TRUE, abbr = TRUE)
+dat <- dat %>%
+  mutate(mortality_rate = ifelse(actual_biomass_on_site_tonnes > 0,
+                                 (mortalities_kilograms / (actual_biomass_on_site_tonnes * 1000)) * 100,
+                                 NA))
+
+
+# Count distinct licence_active_at_report per site
+licence_conflicts <- dat %>%
+  group_by(site_number) %>%
+  summarise(
+    n_licences = n_distinct(licence_active_at_report),
+    licences = paste(unique(licence_active_at_report), collapse = "; ")
+  ) %>%
+  filter(n_licences > 1)
+
+# View any sites with >1 licence reported
+print(licence_conflicts)
+
+
+# subest salmon
+salmon_df <- dat %>% filter((species_farmed == "SAL" | 
+                             species_farmed == "SAL/COD/HAL/HAD/TR" | 
+                             species_farmed == "SAL/COD/HAL/TRO" | 
+                             species_farmed == "SAL/LUM/WRS"))
+print(nrow(salmon_df)) # subset for farmed species
+
+salmon_df_1 <- salmon_df %>% filter((mortality_rate < 100 | is.na(mortality_rate))                               & year > 2002)
+# provide some info for write up
+print(paste0("number of data rows ", min(salmon_df_1$year), "-", max(salmon_df_1$year)))
+print(nrow(salmon_df_1)) # subset for 2003 onwards removing anomilies
+print(length(unique(salmon_df_1$site_name))) 
+#find "no number sites"
+check_number<- salmon_df_1 %>% filter((site_number == "no number"|site_number =="No number"))
+#22 years 1 vaule per site per month 
+22*12*355
+#print(nrow(check_number)) # subset for farmed species
+
+summary(as.factor(check_number$sepa_site))
+summary(as.factor(check_number$local_authority))
+
+salmon_df_1$site_number[salmon_df_1$sepa_site=="ARDM1"] <- "XX001"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="BLMQ1"] <- "XX002"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="BTW1"] <- "XX003"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="FFMC17"] <- "XX004"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="FFMC78"] <- "XX005"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="FFMC79"] <- "XX006"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="GON1"] <- "XX007"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="GVRW1"] <- "FS0242"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="HMR1"] <- "XX009"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="MIL1"] <- "XX010"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="NKBN1"] <- "FS1365"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="NRAS1"] <- "XX012"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="RUIN1"] <- "XX013"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="SNIZ1"] <- "XX014"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="TOL1"] <- "XX015"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="USH1"] <- "XX016"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="VUMN1"] <- "XX017"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="WGH1"] <- "XX018"
+salmon_df_1$site_number[salmon_df_1$sepa_site=="WGR1"] <- "XX019"
+
+# provide some info for write up
+# Count number of records per site per year-month
+duplicate_licence <- salmon_df_1 %>%
+  group_by(site_number, year, month) %>%
+  tally() %>%
+  filter(n > 1)
+
+# View duplicates
+print(duplicate_licence)
+
+dat_summarised <- salmon_df_1 %>%
+  group_by(site_number, year, month) %>%
+  summarise(
+    date = min(date),
+    sepa_site = first(sepa_site),
+    site_name = first(site_name),
+    operator = first(operator),
+    receiving_water = first(receiving_water),
+    region = first(survey_region),
+    active_licence_number = paste(unique(active_licence_number), collapse = "; "),
+    licence_active_at_report = paste(unique(licence_active_at_report), collapse = "; "),
+    actual_biomass_on_site_tonnes = sum(actual_biomass_on_site_tonnes, na.rm = TRUE),
+    mortalities_kilograms = sum(mortalities_kilograms, na.rm = TRUE),
+    feed_kilograms = sum(feed_kilograms, na.rm = TRUE),
+    deltamethrin_grams = sum(deltamethrin_grams, na.rm = TRUE),
+    cypermethrin_grams = sum(cypermethrin_grams, na.rm = TRUE),
+    azamethiphos_grams = sum(azamethiphos_grams, na.rm = TRUE),
+    emamectin_benzoate_grams = sum(emamectin_benzoate_grams, na.rm = TRUE),
+    mortality_rate = mean(mortality_rate, na.rm = TRUE),  # or weighted avg if needed
+    n_records = n(),
+    .groups = "drop"
+  )
+# Add QA flag
+dat_summarised <- dat_summarised %>%
+  mutate(
+    multiple_licences = grepl(";", licence_active_at_report),
+    anomaly_flag = ifelse(n_records > 1 | multiple_licences, TRUE, FALSE)
+  )
+summary(dat_summarised$multiple_licences)
+
+# print QA
+write.csv(licence_conflicts, "./QA_checks/qa_flag_licence_conflicts.csv", row.names = FALSE)
+write.csv(duplicate_licence, "./QA_checks/qa_flag_month_duplicates.csv", row.names = FALSE)
+
+dat_summarised <- dat_summarised %>%
+  mutate(mortality_rate = ifelse(actual_biomass_on_site_tonnes > 0,
+                                 (mortalities_kilograms / (actual_biomass_on_site_tonnes * 1000)) * 100,
+                                 NA))
+
+
+# create extra output with SEPA data as monthly values no dubfor SJ's checks
+dat_one_value_per_month <- salmon_df_1 %>%
+  group_by(site_number, year, month) %>%
+  summarise(
+    date = min(date),
+    sepa_site = paste(unique(sepa_site), collapse = "; "),
+    site_name = paste(unique(site_name), collapse = "; "),
+    operator = paste(unique(operator), collapse = "; "),
+    receiving_water = paste(unique(receiving_water), collapse = "; "),
+    survey_region = paste(unique(survey_region), collapse = "; "),
+    active_licence_number = paste(unique(active_licence_number), collapse = "; "),
+    licence_active_at_report = paste(unique(licence_active_at_report), collapse = "; "),
+    actual_biomass_on_site_tonnes = sum(actual_biomass_on_site_tonnes, na.rm = TRUE),
+    mortalities_kilograms = sum(mortalities_kilograms, na.rm = TRUE),
+    #feed_kilograms = sum(feed_kilograms, na.rm = TRUE),
+    #deltamethrin_grams = sum(deltamethrin_grams, na.rm = TRUE),
+    #cypermethrin_grams = sum(cypermethrin_grams, na.rm = TRUE),
+    #azamethiphos_grams = sum(azamethiphos_grams, na.rm = TRUE),
+    #emamectin_benzoate_grams = sum(emamectin_benzoate_grams, na.rm = TRUE),
+    #mortality_rate = mean(mortality_rate, na.rm = TRUE),  # or weighted avg if needed
+    n_records = n(),
+    .groups = "drop"
+  )
+
+dat_one_value_per_month <- dat_one_value_per_month %>%
+  mutate(mortality_rate = ifelse(actual_biomass_on_site_tonnes > 0,
+                                 (mortalities_kilograms / (actual_biomass_on_site_tonnes * 1000)) * 100,
+                                 NA))
+#print(nrow(salmon_df_1))  # subset for year above 2002 and morts less than 100%
+print(paste0("number of data rows containing biomass greater than 0 (FALSE)", min(salmon_df_1$year), "-", max(salmon_df_1$year)))
+print(summary(as.factor(salmon_df_1$actual_biomass_on_site_tonnes==0)))
+
+#print((salmon_df_1)) # subset for 2003 onwards removing anomilies
+number_of_sites <- (unique(salmon_df_1$site_number))
+print(paste0("number of unique sites ", min(salmon_df_1$year), "-", max(salmon_df_1$year)))
+print(length(number_of_sites))  # subset for year above 2002 and morts less than 100%
+
+# add in estimated stocking cycle info
+
+salmon_df_2 <- dat_one_value_per_month %>%
+  arrange(site_number, date) %>%
+  group_by(site_number) %>%
+  mutate(
+    biomass_zero = actual_biomass_on_site_tonnes == 0,
+    biomass_lag  = lag(biomass_zero, default = TRUE),
+    cycle_boundary = biomass_lag & !biomass_zero,
+    stock_cycle = cumsum(cycle_boundary)
+  ) %>%
+  ungroup() %>%
+  group_by(site_number, stock_cycle) %>%
+  arrange(date, .by_group = TRUE) %>%
+  mutate(
+    stock_cycle_month_n = row_number(),
+    cycle_start_date = min(date[actual_biomass_on_site_tonnes > 0], na.rm = TRUE),
+    cycle_end_date = max(date[actual_biomass_on_site_tonnes > 0], na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+###############################################
+# check this estimate against data JF provided 
+##################################################
+StockingFallowMorts<- read.csv("./data/StockingFallowMorts-SEPA_checked.csv")
+
+str(StockingFallowMorts)
+
+#Step 1: Preprocess StockingFallowMorts
+#Make sure dates are in proper format, and extract #month/year:
+# Clean and parse date columns
+StockingFallowMorts_clean <- StockingFallowMorts %>%
+  filter(!is.na(Month.beginning), Month.beginning >= "01/01/2019") %>%
+  mutate(
+    sepa_site = Site.ID,
+    month_date = dmy(Month.beginning),
+    stocking_date = dmy(Stocking.Date),
+    fallow_date = dmy(Fallow.Date)
+  )
+
+# Ensure salmon_df_2 dates are Date class and minimal per cycle
+salmon_check <- salmon_df_2 %>%
+  filter(year >= "2019") %>%
+  group_by(site_number,sepa_site, stock_cycle) %>%
+  summarise(
+    cycle_start_date = min(date, na.rm = TRUE),
+    cycle_end_date = max(date, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(sepa_site = sepa_site)  # Align site name key
+
+# Join by site + date proximity (same month)
+stock_cycle_check <- StockingFallowMorts_clean %>%
+  inner_join(salmon_check, by = "sepa_site") %>%
+  filter(month(month_date) == month(cycle_start_date) & year(month_date) == year(cycle_start_date)) %>%
+  mutate(
+    match_stocking = !is.na(stocking_date) & floor_date(stocking_date, "month") == floor_date(cycle_start_date, "month"),
+    match_fallow = !is.na(fallow_date) & floor_date(fallow_date, "month") == floor_date(cycle_end_date, "month")
+  )
+
+cycle_match_summary <- stock_cycle_check %>%
+  summarise(
+    total_checked = n(),
+    stocking_matches = sum(match_stocking, na.rm = TRUE),
+    fallow_matches = sum(match_fallow, na.rm = TRUE),
+    full_matches = sum(match_stocking & match_fallow, na.rm = TRUE)
+  )
+
+mismatch_flags <- stock_cycle_check %>%
+  filter(!(match_stocking & match_fallow)) %>%
+  select(sepa_site, month_date, cycle_start_date, cycle_end_date, stocking_date, fallow_date, match_stocking, match_fallow)
+
+write.csv(mismatch_flags, "./QA_checks/qa_flag_cycle_mismatch_SEPA_reportedand_MM_Estimated.csv", row.names = FALSE)
+
+#add flag for  decreasing biomass within a cycle
+#This logic checks whether biomass ever decreases #month-to-month in a given cycle
+salmon_df_2 <- salmon_df_2 %>%
+  arrange(site_number, stock_cycle, date) %>%
+  group_by(site_number, stock_cycle) %>%
+  mutate(
+    previous_biomass = lag(actual_biomass_on_site_tonnes),
+    biomass_change = actual_biomass_on_site_tonnes - previous_biomass,
+    biomass_decrease_flag = !is.na(previous_biomass) & biomass_change < 0
+  ) %>%
+  ungroup()
+# For each cycle, we’ll create a flag if biomass drops more than mortality alone could explain, suggesting data inconsistency, unreported harvest, or error.
+
+
+# First, calculate lagged biomass and month-over-month change
+#salmon_df_2 <- salmon_df_2 %>%
+#  arrange(site_number, stock_cycle, date) %>%
+#  group_by(site_number, stock_cycle) %>%
+#  mutate(
+#    biomass_lag = lag(actual_biomass_on_site_tonnes),
+#    biomass_change = actual_biomass_on_site_tonnes - biomass_lag
+#  ) %>%
+#  ungroup()
+
+
+# 2. Calculate average biomass growth (positive changes only)
+
+cycle_growth_buffer <- salmon_df_2 %>%
+  filter(biomass_change > 0) %>%
+  group_by(site_number, stock_cycle) %>%
+  summarise(
+    avg_growth_tonnes = mean(biomass_change, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#3. Join buffer back into main data
+salmon_df_2 <- salmon_df_2 %>%
+  left_join(cycle_growth_buffer, by = c("site_number", "stock_cycle"))
+
+
+# 4. Flag unexplained drops using mortality and dynamic buffer
+
+salmon_df_2 <- salmon_df_2 %>%
+  group_by(site_number, stock_cycle) %>%
+  mutate(
+    biomass_tonnes_lag = lag(actual_biomass_on_site_tonnes),
+    mortality_kg_lag = lag(mortalities_kilograms),
+    mortality_tonnes_lag = mortality_kg_lag / 1000,
+
+    # Allow drop equal to mortality + average growth
+    unexplained_biomass_drop = biomass_change < (-mortality_tonnes_lag - avg_growth_tonnes),
+    unexplained_biomass_drop = ifelse(is.na(unexplained_biomass_drop), FALSE, unexplained_biomass_drop)
+  ) %>%
+  ungroup()
+
+#5. Flag cycles with any anomaly
+
+cycle_flags <- salmon_df_2 %>%
+  group_by(site_number, stock_cycle) %>%
+  summarise(
+    cycle_has_unexplained_drop = any(unexplained_biomass_drop, na.rm = TRUE),
+    n_flags = sum(unexplained_biomass_drop, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+write.csv(cycle_flags, "./QA_checks/qa_flag_cylce_unexplained_biomass_drop_SEPA_Data.csv", row.names = FALSE)
+# calculate adjusted mortality 
+
+salmon_df_2 <- salmon_df_2 %>%
+  group_by(site_number, stock_cycle) %>%
+  arrange(date, .by_group = TRUE) %>%
+  mutate(
+    previous_biomass = lag(actual_biomass_on_site_tonnes),
+    biomass_decrease_flag == TRUE & !is.na(previous_biomass) & previous_biomass > 0 & actual_biomass_on_site_tonnes < previous_biomass,
+    adjusted_mortality_rate = case_when(
+      biomass_decrease_flag &
+      !is.na(mortality_rate) &
+      actual_biomass_on_site_tonnes > 0 ~ 
+      (mortalities_kilograms / (previous_biomass * 1000) * 100),
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  ungroup()
+
+
+salmon_df_3 <- salmon_df_2 %>% filter(!actual_biomass_on_site_tonnes == 0)
+# Find inactive sites with no data after 2018
+active_sites <- salmon_df_3 %>%
+  filter(year > 2017) %>%
+  distinct(site_number) %>%
+  pull(site_number)
+
+#active_sites<-(unique(active_sites))
+
+salmon_df_active <- salmon_df_2 %>% 
+  filter(site_number %in% active_sites)
+# check 
+all_sites <- unique(salmon_df_2$site_number)
+inactive_sites <- setdiff(all_sites, active_sites)
+length(inactive_sites)  # How many dropped
+length(active_sites)
+#check
+salmon_df_active %>%
+  group_by(site_number) %>%
+  summarise(min_year = min(year), max_year = max(year), .groups = "drop") %>%
+  arrange(desc(max_year))
+
+
+#print(summary(!is.na(salmon_df_active$mortality_rate)))
+salmon_df_active <- salmon_df_active  %>% filter(!is.na(mortality_rate))
+
+print(unique(salmon_df_active$site_number))
+
+print(unique(fhi_monthly_summary_plus$site_number))
+
+str(salmon_df_active[, c("site_number", "year", "month")])
+str(fhi_monthly_summary_plus[, c("site_number", "year", "month")])
+
+#clean up global environment
+rm(salmon_check, salmon_df, salmon_df_1, salmon_df_2, salmon_df_3, stock_cycle_check, mismatch_flags, licence_conflicts, StockingFallowMorts)
+rm(check_number, cycle_flags, cycle_growth_buffer, cycle_match_summary, dat_summarised, dat_one_value_per_month, inactive_sites, number_of_sites, duplicate_licence)
+rm(active_sites, all_sites, fhi_clean, StockingFallowMorts_clean, dat)
+```
+
+
+
+```{r join SEPA-and-FHI-dat, echo=FALSE}
+salmon_df_joined <- salmon_df_active %>%
+  left_join(fhi_monthly_summary_plus, by = c("site_number", "year", "month"))
+
+# make an estimate of number of fish 
+salmon_df_joined <- salmon_df_joined %>%
+  mutate(
+    est_total_fish_count_COGP = actual_biomass_on_site_tonnes * 1e6 / 3300,  # 3300g per fish (COGP values)
+    calculated_mortality_rate_COGP = mortality_rate / est_total_fish_count_COGP * 100
+  )
+
+salmon_df_joined <- salmon_df_joined %>%
+  mutate(est_fish_lost_cogp_size = mortalities_kilograms * 1000 / 3300)
+#check cogp V fhi fish lost numbers
+salmon_df_joined <- salmon_df_joined %>%
+  mutate(est_fish_lost_fhi_size = mortalities_kilograms * 1000 / average_size_of_fish_g_fhi)
+#plot.new()
+#plot(salmon_df_joined$average_size_of_fish_g, salmon_df_joined$est_fish_lost_fhi_size)
+#abline(0,1, col="red", add=TRUE)
+
+# make this salmon joined data from 2018 onwards
+
+salmon_df_joined_2018 <-salmon_df_joined %>% filter(year > 2017)
+
+# provide some info for write up
+print(paste0("number of data rows ", min(salmon_df_joined_2018$year), "-", max(salmon_df_joined_2018$year)))
+print(nrow(salmon_df_joined_2018)) # subset for 2003 onwards removing anomilies
+number_of_sites_1 <- (unique(salmon_df_joined_2018$site_number))
+print(paste0("number of unique sites ", min(salmon_df_joined_2018$year), "-", max(salmon_df_joined_2018$year)))
+print(length(number_of_sites_1))  # subset for year above 2018 and morts less than 100%
+
+
+rm(salmon_df, salmon_df_1, salmon_df_2, salmon_df_3, salmon_check, check_number, 
+   cols_to_drop, StockingFallowMorts, StockingFallowMorts_clean, inactive_sites,
+   mismatch_flags, stock_cycle_check, licence_conflicts, end_year_is_different,
+   end_month_is_different, end_date_earlier_than_start_date, duplicate_licence)
+
+print(summary(as.factor(salmon_df_joined_2018$site_number)))
+
+```
+
+# Logic Model Step 1 - Determine definitions
+## Define Elevated Monthly Mortality 
+### Baseline Monthly Mortality Summary (2003–2024)
+```{r seasonality-heatmap,  echo=FALSE}
+print(nrow(salmon_df_active))
+unique_sites_active <- unique(salmon_df_active$site_number)
+print(nrow(as.data.frame(unique_sites_active)))
+
+print(nrow(salmon_df_joined_2018))
+
+unique_sites_active_2018 <- unique(salmon_df_joined_2018$site_number)
+print(nrow(as.data.frame(unique_sites_active_2018)))
+
+summary_stats_salmon <- salmon_df_active %>%
+    dplyr::reframe( n_observations = n(),
+                    mean = round(mean(mortality_rate, na.rm = TRUE),2),
+                     median = round(median(mortality_rate, na.rm = TRUE),2),
+                    IQR = round(IQR(mortality_rate, na.rm = TRUE),2),
+                     p95 = round(quantile(mortality_rate, 0.95, na.rm = TRUE),2),
+                     p99 = round(quantile(mortality_rate, 0.99, na.rm = TRUE),2)) %>%
+  gt() %>%
+  tab_header(title = "Mortality Summary - 2003-2024 SEPA data")
+
+summary_stats_salmon_2018 <- salmon_df_joined_2018 %>%
+    dplyr::reframe( n_observations = n(),
+                    mean = round(mean(mortality_rate, na.rm = TRUE),2),
+                    median = round(median(mortality_rate, na.rm = TRUE),2),
+                    IQR = round(IQR(mortality_rate, na.rm = TRUE),2),
+                    p95 = round(quantile(mortality_rate, 0.95, na.rm = TRUE),2),
+                    p99 = round(quantile(mortality_rate, 0.99, na.rm = TRUE),2)) %>%
+  gt() %>%
+  tab_header(title = "Mortality Summary - SEPA data 2018-2024")
+
+
+# Ensure month is ordered factor for correct plotting
+salmon_df_active$month_f <- month.abb[salmon_df_active$month]
+summary(salmon_df_active)
+# Aggregate average mortality by year and month
+monthly_heatmap <- salmon_df_active %>%
+  group_by(year, month, month_f) %>%
+  summarise(avg_mortality = mean(mortality_rate, na.rm = TRUE))
+monthly_heatmap$Month <- factor(monthly_heatmap$month_f, levels = c("Jan", "Feb", "Mar", "Apr",  "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"))
+# Heatmap
+heatmap <-   ggplot(monthly_heatmap, aes(x = factor(Month), 
+                                         y = factor(year), 
+                                         fill = avg_mortality)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option = "C", name = "Avg Mortality (%)") +
+  labs(title = "Heatmap of Average Monthly Mortality (Salmon)",
+       x = "Month",
+       y = "Year") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5))
+
+# Save as PNG (300 dpi, 8x6 inches)
+ggsave("fig1_mortality_heatmap.png", plot = heatmap,
+       width = 8, height = 6, dpi = 300, units = "in")
+
+# Save as TIFF (publication-grade)
+ggsave("fig1_mortality_heatmap.tiff", plot = heatmap,
+       width = 8, height = 6, dpi = 600, units = "in", compression = "lzw")
+heatmap
+
+
+greyscale_heatmap <-  ggplot(monthly_heatmap, aes(x = factor(Month), y = factor(year), fill = avg_mortality)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(
+    low = "grey90", high = "black",
+    name = "Avg Mortality (%)"
+  ) +
+  labs(
+    title = "Heatmap of Average Monthly Mortality (Salmon)",
+    x = "Month",
+    y = "Year"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
+  )
+
+
+heatmapV1 <- ggplot(monthly_heatmap, aes(x = factor(Month), y = factor(year), fill = avg_mortality)) +
+  geom_tile(color = "white") +
+  scale_fill_gradientn(
+    colours = c("grey95", "grey75", "grey55", "grey35", "grey15"),
+    name = "Avg Mortality (%)"
+  ) +
+  labs(
+    title = "Heatmap of Average Monthly Mortality (Salmon)",
+    x = "Month",
+    y = "Year"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    panel.grid = element_blank()
+  )
+
+# Save as PNG (300 dpi, 8x6 inches)
+ggsave("fig1_mortality_heatmap_BW.png", plot = heatmapV1,
+       width = 8, height = 6, dpi = 300, units = "in")
+
+# Save as TIFF (publication-grade)
+ggsave("fig1_mortality_heatmapBW.tiff", plot = heatmapV1,
+       width = 8, height = 6, dpi = 600, units = "in", compression = "lzw")
+
+summary_stats_salmon
+summary_stats_salmon_2018
+
+
+# Aggregate average mortality by year and month
+yearly_heatmap <- salmon_df_active %>%
+  group_by(year) %>%
+  summarise(avg_mortality =round(mean(mortality_rate, na.rm = TRUE), 2),
+            sd_mortality = round(sd(mortality_rate, na.rm=TRUE), 2))
+
+write.csv(yearly_heatmap, "mortality_summary_by_year_SEPA.csv", row.names = FALSE)
+
+
+
+yearly_summary<-salmon_df_active %>%
+  group_by(year) %>%
+  summarise(
+    Mean = round(mean(mortality_rate, na.rm = TRUE),2),
+    Median = round(median(mortality_rate, na.rm = TRUE),2),
+    IQR = round(IQR(mortality_rate, na.rm = TRUE),2),
+    P95 = round(quantile(mortality_rate, 0.95, na.rm = TRUE),2),
+    P99 = round(quantile(mortality_rate, 0.99, na.rm = TRUE),2),
+    Observations = n()
+  ) 
+
+write.csv(yearly_summary, "mortality_summary_by_year_SEPA.csv", row.names = FALSE)
+
+```
+
+### Mortality by Survey Region
+```{r survey-region-table, echo=FALSE}
+# Combine regions
+salmon_df_active <- salmon_df_active %>%
+  mutate(region_grouped = case_when(
+    survey_region %in% c("Highland", "North West") ~ "Highland & NW",
+    survey_region %in% c("South West", "Strathclyde") ~ "South West & Strathclyde",
+    TRUE ~ survey_region
+  ))
+
+salmon_df_joined_2018<- salmon_df_joined_2018 %>%
+  mutate(region_grouped = case_when(
+    survey_region %in% c("Highland", "North West") ~ "Highland & NW",
+    survey_region %in% c("South West", "Strathclyde") ~ "South West & Strathclyde",
+    TRUE ~ survey_region
+  ))
+# Step 1: Create the summary table (as a regular data frame or tibble)
+mortality_summary <- salmon_df_active %>%
+  group_by(region_grouped, site_number) %>%
+  summarise(
+    Mean = round(mean(mortality_rate, na.rm = TRUE), 2),
+    Median = round(median(mortality_rate, na.rm = TRUE), 2),
+    IQR = round(IQR(mortality_rate, na.rm = TRUE), 2),
+    P95 = round(quantile(mortality_rate, 0.95, na.rm = TRUE), 2),
+    P99 = round(quantile(mortality_rate, 0.99, na.rm = TRUE), 2),
+    start_year = min(year), 
+    final_year = max(year),
+    Observations = n(),
+    .groups = "drop"
+  )
+
+# Step 2: Save it to a CSV file
+write.csv(mortality_summary, "mortality_summary_by_region_site.csv", row.names = FALSE)
+
+# Step 3: (Optional) Create the gt table for display in the Markdown output
+#mortality_summary %>%
+#  gt() %>%
+#  tab_header(title = "Monthly Mortality % Summary by Survey #Region/Site 2003–2024")
+
+salmon_df_active %>%
+  group_by(region_grouped) %>%
+  summarise(
+    Mean = round(mean(mortality_rate, na.rm = TRUE),2),
+    Median = round(median(mortality_rate, na.rm = TRUE),2),
+    IQR = round(IQR(mortality_rate, na.rm = TRUE),2),
+    P95 = round(quantile(mortality_rate, 0.95, na.rm = TRUE),2),
+    P99 = round(quantile(mortality_rate, 0.99, na.rm = TRUE),2),
+    Observations = n()
+  ) %>%
+  gt() %>%
+  tab_header(title = "Montly Mortality % Summary by Survey Region 2003-2024")
+
+
+# national stats 
+salmon_df_active %>%
+  summarise(
+    Mean = round(mean(mortality_rate, na.rm = TRUE),2),
+    Median = round(median(mortality_rate, na.rm = TRUE),2),
+    IQR = round(IQR(mortality_rate, na.rm = TRUE),2),
+    P95 = round(quantile(mortality_rate, 0.95, na.rm = TRUE),2),
+    P99 = round(quantile(mortality_rate, 0.99, na.rm = TRUE),2),
+    Observations = n()
+  ) %>%
+  gt() %>%
+  tab_header(title = "Montly Mortality % Summary (national average  2003-2024")
+#Step 1: Create the summary table (as a regular data frame or tibble)
+salmon_df_joined_2018 %>%
+  group_by(region_grouped) %>%
+  summarise(
+    Mean = round(mean(mortality_rate, na.rm = TRUE),2),
+    Median = round(median(mortality_rate, na.rm = TRUE),2),
+    IQR = round(IQR(mortality_rate, na.rm = TRUE),2),
+    P95 = round(quantile(mortality_rate, 0.95, na.rm = TRUE),2),
+    P99 = round(quantile(mortality_rate, 0.99, na.rm = TRUE),2),
+    Observations = n()
+  ) %>%
+  gt() %>%
+  tab_header(title = "Monthly Mortality % Summary (regional 2018-2024)")
+# Step 2: Save it to a CSV file
+
+
+yearly_summary<-salmon_df_joined_2018 %>%
+  #group_by(year) %>%
+  summarise(
+    Mean = round(mean(mortality_rate, na.rm = TRUE),2),
+    Median = round(median(mortality_rate, na.rm = TRUE),2),
+    IQR = round(IQR(mortality_rate, na.rm = TRUE),2),
+    P95 = round(quantile(mortality_rate, 0.95, na.rm = TRUE),2),
+    P99 = round(quantile(mortality_rate, 0.99, na.rm = TRUE),2),
+    Observations = n()
+  ) 
+
+# Step 2: Save it to a CSV file
+write.csv(yearly_summary, "mortality_summary_by_year.csv", row.names = FALSE)
+
+# Step 3: (Optional) Create the gt table for display in the Markdown output
+yearly_summary%>%
+ gt() %>%
+  tab_header(title = "Monthly Mortality % Summary by Year #(2018-2024)")
+
+
+
+yearly_summary<-salmon_df_joined_2018 %>%
+  group_by(year) %>%
+  summarise(
+    Mean = round(mean(mortality_rate, na.rm = TRUE),2),
+    Median = round(median(mortality_rate, na.rm = TRUE),2),
+    IQR = round(IQR(mortality_rate, na.rm = TRUE),2),
+    P95 = round(quantile(mortality_rate, 0.95, na.rm = TRUE),2),
+    P99 = round(quantile(mortality_rate, 0.99, na.rm = TRUE),2),
+    Observations = n()
+  ) 
+write.csv(yearly_summary, "mortality_summary_by_year_SalScot.csv", row.names = FALSE)
+
+```
+
+### Kernel Density with Quantiles SEPA Data 2003-2024
+(logged data for ease of interpertation)
+```{r baseline-kde-SEPA, echo=FALSE}
+quantiles <- quantile(salmon_df_active$mortality_rate, probs = c(0.5, 0.75, 0.95, 0.99), na.rm = TRUE)
+
+length(salmon_df_active$mortality_rate[salmon_df_active$mortality_rate>1.47])/length(salmon_df_active$mortality_rate)
+
+
+
+length(salmon_df_joined_2018$mortality_rate[salmon_df_joined_2018$mortality_rate>1.47])/length(salmon_df_joined_2018$mortality_rate)
+
+mort_plot <- salmon_df_active %>%
+  ggplot(aes(x = log(mortality_rate))) +
+  geom_density(fill = "lightblue", alpha = 0.6) +
+  geom_vline(xintercept = log(quantiles), 
+             linetype = "dashed", 
+             color = c("blue", "green", "orange", "red")) +
+  annotate("text", x = log(quantiles), y = 0.01, 
+           label = names(quantiles), angle = 90, vjust = -0.5) +
+  labs(title = "a.) Kernel Density of Monthly Mortality Rates (SEPA, Salmon, 2003–2024)",
+       x = "Logged Mortality Rate (%)", y = "Density") +
+  theme_minimal()
+
+# Save as PNG (300 dpi, 8x6 inches)
+ggsave("fig2a_mortality_density.png", plot = mort_plot,
+       width = 8, height = 6, dpi = 300, units = "in")
+
+# Save as TIFF (publication-grade)
+ggsave("fig2a_mortality_density.tiff", plot = mort_plot,
+       width = 8, height = 6, dpi = 600, units = "in", compression = "lzw")
+mort_plot
+```
+
+### March 4th 2026 
+make kd unlogged for revision 
+### 
+``` {r kde normal, echo=FALSE}
+
+mort_plot <- salmon_df_active %>%
+  ggplot(aes(x = (mortality_rate))) +
+  geom_density(fill = "lightblue", alpha = 0.6) +
+  geom_vline(xintercept = quantiles, 
+             linetype = "dashed", 
+             color = c("blue", "green", "orange", "red")) +
+  annotate("text", x = quantiles, y = 0.01, 
+           label = names(quantiles), angle = 90, vjust = -0.5) +
+  labs(title = "a.) Kernel Density of Monthly Mortality Rates (SEPA, Salmon, 2003–2024)",
+       x = "Mortality Rate (%)", y = "Density") +
+  theme_minimal()
+
+# Save as PNG (300 dpi, 8x6 inches)
+ggsave("fig2a_mortality_density_alt.png", plot = mort_plot,
+       width = 8, height = 6, dpi = 300, units = "in")
+
+# Save as TIFF (publication-grade)
+ggsave("fig2a_mortality_density_alt.tiff", plot = mort_plot,
+       width = 8, height = 6, dpi = 600, units = "in", compression = "lzw")
+mort_plot
+```
+
+### Kernel Density Plot of Monthly Mortality SALSCOT
+sepa and sal scot data is log normal - important to understand for further analysis
+```{r kde-quantiles-SalScot, echo=FALSE}
+quantiles <- quantile(pc.dat$monthly_mortality, probs = c(0.5, 0.75, 0.95, 0.99), na.rm = TRUE)
+
+
+length(pc.dat$monthly_mortality[pc.dat$monthly_mortality>1.47])/length(pc.dat$monthly_mortality)
+
+mort_plot_salscot <- pc.dat %>%
+  ggplot(aes(x = log(monthly_mortality))) +
+  geom_density(fill = "skyblue", alpha = 0.5) +
+  geom_vline(xintercept = log(quantiles), linetype = "dashed", color = c("blue", "green", "orange", "red")) +
+  annotate("text", x = log(quantiles), y = 0.01, label = names(quantiles), angle = 90, vjust = -0.5) +
+  labs(title = "b.) Kernel Density of Monthly Mortality Rates (Salmon Scotland, 2018–2024)",
+       x = "Logged Monthly Mortality (%)", y = "Density") +
+  theme_minimal()
+
+# Save as PNG (300 dpi, 8x6 inches)
+ggsave("fig2b_mortality_density.png", plot = mort_plot_salscot,
+       width = 8, height = 6, dpi = 300, units = "in")
+
+# Save as TIFF (publication-grade)
+ggsave("fig2n_mortality_density.tiff", plot = mort_plot_salscot,
+       width = 8, height = 6, dpi = 600, units = "in", compression = "lzw")
+mort_plot_salscot
+
+summary_stats_salmonscot <- pc.dat %>%
+    dplyr::reframe( n_observations = n(),
+                    mean = round(mean(monthly_mortality, na.rm = TRUE),2),
+                     median = round(median(monthly_mortality, na.rm = TRUE),2),
+                    IQR = round(IQR(monthly_mortality, na.rm = TRUE),2),
+                     p95 = round(quantile(monthly_mortality, 0.95, na.rm = TRUE),2),
+                     p99 = round(quantile(monthly_mortality, 0.99, na.rm = TRUE),2)) %>%
+  gt() %>%
+  tab_header(title = "Mortality Summary - Salmon Scot data")
+summary_stats_salmonscot
+
+pc.dat %>%
+  group_by(survey_region) %>%
+  summarise(
+    Mean = round(mean(monthly_mortality, na.rm = TRUE),2),
+    Median = round(median(monthly_mortality, na.rm = TRUE),2),
+    IQR = round(IQR(monthly_mortality, na.rm = TRUE),2),
+    P95 = round(quantile(monthly_mortality, 0.95, na.rm = TRUE),2),
+    P99 = round(quantile(monthly_mortality, 0.99, na.rm = TRUE),2),
+    Observations = n()
+  ) %>%
+  gt() %>%
+  tab_header(title = "Monthly Mortality % Summary by Survey Region (SalScot)")
+
+
+yearly_summary_salscot<-pc.dat %>%
+  group_by(year) %>%
+  summarise(
+    Mean = round(mean(monthly_mortality, na.rm = TRUE),2),
+    Median = round(median(monthly_mortality, na.rm = TRUE),2),
+    IQR = round(IQR(monthly_mortality, na.rm = TRUE),2),
+    P95 = round(quantile(monthly_mortality, 0.95, na.rm = TRUE),2),
+    P99 = round(quantile(monthly_mortality, 0.99, na.rm = TRUE),2),
+    Observations = n()
+  ) 
+# Step 2: Save it to a CSV file
+write.csv(yearly_summary_salscot, "mortality_summary_by_year_salscot.csv", row.names = FALSE)
+
+# Step 3: (Optional) Create the gt table for display in the Markdown output
+#yearly_summary_salscot%>%
+#  gt() %>%
+#  tab_header(title = "Monthly Mortality % Summary by Year (SalScot #2018-2024)")
+
+
+```
+figure 2 for paper kernal density 
+tables for narrative/ paper
+### March 4th 2026 
+make kd unlogged for revision 
+```{r alt_kde_salscot echo=FALSE}
+mort_plot_salscot <- pc.dat %>%
+  ggplot(aes(x = (monthly_mortality))) +
+  geom_density(fill = "skyblue", alpha = 0.5) +
+  geom_vline(xintercept = quantiles, linetype = "dashed", color = c("blue", "green", "orange", "red")) +
+  annotate("text", x = quantiles, y = 0.01, label = names(quantiles), angle = 90, vjust = -0.5) +
+  labs(title = "b.) Kernel Density of Monthly Mortality Rates (Salmon Scotland, 2018–2024)",
+       x = "Monthly Mortality (%)", y = "Density") +
+  theme_minimal()
+
+# Save as PNG (300 dpi, 8x6 inches)
+ggsave("fig2b_mortality_density_alt.png", plot = mort_plot_salscot,
+       width = 8, height = 6, dpi = 300, units = "in")
+
+# Save as TIFF (publication-grade)
+ggsave("fig2n_mortality_density_alt.tiff", plot = mort_plot_salscot,
+       width = 8, height = 6, dpi = 600, units = "in", compression = "lzw")
+mort_plot_salscot
+
+```
+
+
+```{r clean-up-global-env, echo=FALSE}
+rm(number_of_sites, quantiles,summary_stats_salmon, summary_stats_salmon_2018, summary_stats_salmonscot, unique_sites_active, unique_sites_active_2018, yearly_summary, yearly_summary_salscot, greyscale_heatmap, heatmap, heatmapV1, mort_plot, mort_plot_salscot)
+write.csv(mortality_summary, "Active_SEPA_Site_Summary_Mortality_Stats.csv")
+rm(mortality_summary)
+```
+
+### Logic Model Step 2 - Calculating monthly mortality rate
+
+Using the SEPA data, has actual reported biomass increased compared to the previous month? 
+ "biomass_decrease_flag" == FALSE
+  yes - use mortality_rate
+no - Taking into account a growth factor, is a drecrease in biomass explained by reported mortalities? "biomass_decrease_flag" == TRUE
+  yes - use mortality_rate
+no - Has harvesting/cull/transfer been reported in SGMD (FHI) data? col - "action" == CULL HARVEST 
+  yes - use adjusted_mortality_rate
+no - Does the SEPA data support a likely harvesting/cull/transfer that has not been documented? "unexplained_biomass_drop"== TRUE
+  yes - use adjusted_mortality_rate
+no - reported mortality_rate
+
+```{r calculate-monthly-mort-rate, echo=FALSE}
+
+str(salmon_df_joined_2018)
+
+salmon_df_joined_2018 <- salmon_df_joined_2018 %>%
+  mutate(
+    mortality_rate_final = case_when(
+      # 1. Biomass has increased compared to previous month
+      biomass_decrease_flag == FALSE ~ mortality_rate,
+
+      # 2. Biomass decreased, but decrease is explained by reported mortalities
+     # biomass_decrease_flag == TRUE & !is.na(mortality_rate) ~ mortality_rate,
+
+      # 3. Biomass decreased, not explained by mortalities, 
+      # but harvesting/cull/transfer has been reported
+      biomass_decrease_flag == TRUE & action %in% c("Cull", "Harvest", "Fallow", "	Harvest; Fallow", "Fallow; Harvest") ~ adjusted_mortality_rate,
+
+      # 4. Biomass decreased, no action reported, but SEPA data indicates unexplained drop
+      biomass_decrease_flag == TRUE & unexplained_biomass_drop == TRUE ~ adjusted_mortality_rate,
+
+      # 5. Fallback: use reported mortality rate
+      TRUE ~ mortality_rate
+    )
+  )
+salmon_df_joined_2018 %>%
+  select(sepa_site, date, biomass_decrease_flag, action, unexplained_biomass_drop, mortality_rate, adjusted_mortality_rate, mortality_rate_final) %>%
+  head(100)
+
+
+
+
+```
+
+# Logic Model Step 3 - Identifying recurrent elevated mortality
+Does the mortality exceed the elevated mortality rate 
+no - elevated mortality doesn't exist - omit data point
+yes - Does the mortality exceed the elevated mortality rate for 2 consecutive months 
+no - elevated mortality doesn't exist - omit data point
+yes - Is there 2+ months elevated mortality events in 2 consecutive stocking cycles 
+no - elevated mortality doesn't exist - omit data point
+yes - Recurrent mortality exists (check for persistence)
+
+### March 4th 2026 
+plot morts reported V agjusted for revision 
+```{r mortality_final echo=FALSE}
+mort_plot_2 <- salmon_df_joined_2018 %>%
+  ggplot(aes(x = (mortality_rate), y=(mortality_rate_final))) +
+  geom_point(fill = "skyblue", alpha = 0.5) +
+  geom_vline(xintercept = 5.5, linetype = "dashed", color = c("red")) +
+  geom_hline(yintercept = 5.5, linetype = "dashed", color = c("red")) +
+  annotate("text", x = 5.67, y = 5.65, label = "5.5%", angle = 0, vjust = -0.5, color = c("red")) +
+  labs(title = "Monthly Mortality Rates",
+       x = "Reported Monthly Mortality (%)", y = "Final Monthly Mortality (%)") +
+  theme_minimal()
+
+
+
+
+salmon_df_joined_2018 <- salmon_df_joined_2018 %>%
+  mutate(category = case_when(
+    mortality_rate > 5.5 & mortality_rate_final < 5.5 ~ "Above X, Below Y",
+    TRUE ~ "Other"
+  ))
+
+n_flagged <- salmon_df_joined_2018 %>%
+  filter(mortality_rate > 5.5,
+         mortality_rate_final < 5.5) %>%
+  nrow()
+
+mort_plot_2 <- ggplot(salmon_df_joined_2018,
+       aes(x = mortality_rate,
+           y = mortality_rate_final,
+           color = category)) +
+
+  geom_point(alpha = 0.7, size = 2) +
+
+  geom_vline(xintercept = 5.5, linetype = "dashed") +
+  geom_hline(yintercept = 5.5, linetype = "dashed") +
+
+  scale_color_manual(values = c(
+    "Above X, Below Y" = "red",
+    "Other" = "grey70"
+  )) +
+
+  labs(
+    title = "Comparison of Reported vs Final Mortality Rates",
+    subtitle = "Highlighted: Reported > 5.5% and Final < 5.5%",
+    x = "Reported Monthly Mortality (%)",
+    y = "Final Monthly Mortality (%)",
+    color = "Category"
+  ) +
+
+  theme_minimal() + annotate("text",
+           x = Inf, y = -Inf,
+           label = paste("Flagged:", n_flagged, "of 11940"),
+           hjust = 1.1, vjust = -1,
+           size = 4)
+
+# Save as PNG (300 dpi, 8x6 inches)
+ggsave("figXX_mortality_rates_alt.png", plot = mort_plot_2,
+       width = 8, height = 6, dpi = 300, units = "in")
+
+# Save as TIFF (publication-grade)
+ggsave("figXX_mortality_rates_alt.tiff", plot = mort_plot_2,
+       width = 8, height = 6, dpi = 600, units = "in", compression = "lzw")
+
+mort_diff <-salmon_df_joined_2018 %>%
+  mutate(diff = mortality_rate_final - mortality_rate) %>%
+
+  ggplot(aes(x = mortality_rate, y = diff)) +
+
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(alpha = 0.6) +
+
+  labs(
+    title = "Difference Between Final and Reported Mortality",
+    y = "Final - Reported (%)",
+    x = "Reported Mortality (%)"
+  ) +
+
+  theme_minimal()
+
+# Save as PNG (300 dpi, 8x6 inches)
+ggsave("figXX_mortality_diff_alt.png", plot = mort_diff,
+       width = 8, height = 6, dpi = 300, units = "in")
+
+# Save as TIFF (publication-grade)
+ggsave("figXX_mortality_diff_alt.tiff", plot = mort_diff,
+       width = 8, height = 6, dpi = 600, units = "in", compression = "lzw")
+```
+
+``` {r REM-classification, echo=FALSE}
+library(dplyr)
+
+# --- Step 1: Detect within-cycle monthly streaks (≥2 consecutive TRUEs) ---
+detect_streaks <- function(x) {
+  r <- rle(x)
+  rep(r$lengths >= 2 & r$values, r$lengths)
+}
+
+
+high_thresh <- quantile(salmon_df_active$mortality_rate, 0.95, na.rm = TRUE)
+
+ # Step 2 - classify data
+salmon_df_joined_2018 <- salmon_df_joined_2018 %>%
+  mutate(high_event = mortality_rate_final >= high_thresh) %>% 
+  arrange(site_number, date) %>%
+  group_by(site_number) %>%
+  mutate(
+    month_id = row_number(),  # helps with indexing
+    high_event_numeric = as.integer(high_event),
+  ) %>%
+  ungroup()
+
+salmon_df_joined_2018 <- salmon_df_joined_2018 %>%
+  arrange(site_number, stock_cycle, stock_cycle_month_n) %>%
+  group_by(site_number, stock_cycle) %>%
+  mutate(within_cycle_streak = detect_streaks(high_event)) %>%
+  ungroup()
+
+# --- Step 2: Flag cycles that have any within-cycle streak ---
+cycle_summary <- salmon_df_joined_2018 %>%
+  group_by(site_number, stock_cycle) %>%
+  summarise(has_streak = any(within_cycle_streak, na.rm = TRUE), .groups = "drop")
+
+# --- Step 3: Detect consecutive cycles with streaks ---
+cycle_summary <- cycle_summary %>%
+  arrange(site_number, stock_cycle) %>%
+  group_by(site_number) %>%
+  mutate(
+    # Convert stock_cycle to numeric if possible
+    cycle_num = as.numeric(factor(stock_cycle, levels = sort(unique(stock_cycle)))),
+    
+    # Group consecutive cycles with streaks
+    streak_group = cumsum(!(has_streak & dplyr::lag(has_streak, default = FALSE) &
+                            (cycle_num - dplyr::lag(cycle_num, default = cycle_num[1])) == 1)),
+    
+    streak_len = ave(has_streak, streak_group, FUN = function(x) if (all(!x)) 0 else sum(x)),
+    consec_cycle_flag = has_streak & streak_len >= 2
+  ) %>%
+  ungroup()
+
+# --- Step 4: Join back to main dataframe ---
+salmon_df_joined_2018 <- salmon_df_joined_2018 %>%
+  left_join(cycle_summary %>% select(site_number, stock_cycle, consec_cycle_flag),
+            by = c("site_number", "stock_cycle"))
+
+# --- Step 5: Summaries at site level ---
+summary_table <- salmon_df_joined_2018 %>%
+  # Create the category
+  mutate(
+    category = case_when(
+      consec_cycle_flag ~ "b. sites with REM cycles",
+      !consec_cycle_flag ~ "a. sites with no REM cycles"
+    )
+  ) %>%
+  # Summarize by site_number to avoid double-counting rows
+  group_by(site_number, category) %>%
+  summarise(.groups = "drop") #%>%
+  # Count how many sites fall into each category
+ # count(category, name = "num_sites") %>%
+ # arrange(category)
+
+REM_sites <- summary_table %>%
+  filter(category %in% c("b. sites with REM cycles")) %>%
+  pull(site_number)
+
+summary_table %>%
+  count(category, name = "num_sites") %>%
+  arrange(category) %>%
+  gt() %>%
+  tab_header(title = "Number of sites in each recurring classification level 2018-2024")
+
+
+# View the summary table
+summary_table
+
+```
+
+
+### Visualising Recurring Elevated Mortality Cycles SEPA (2018-2024) - control chart in facet grid
+
+```{r highlight-high-cycles-SEPA,fig.width=12, fig.height=12, echo=FALSE}
+national_average <-mean(salmon_df_active$mortality_rate,  na.rm = TRUE)
+#mid_thresh <- quantile(salmon_df_active$mortality_rate, 0.75, na.rm = TRUE)
+high_thresh <- quantile(salmon_df_active$mortality_rate, 0.95, na.rm = TRUE)
+very_high_thresh <- quantile(salmon_df_active$mortality_rate, 0.99, na.rm = TRUE)
+
+# Choose top high-mortality cycles
+ggplot(filter(salmon_df_joined_2018, site_number %in% REM_sites), aes(x = date, y = mortality_rate)) +
+  geom_point(aes(color = stock_cycle)) +
+  # Add threshold line
+    geom_hline(yintercept = high_thresh, linetype = "dashed", color = "red") +
+    geom_hline(yintercept = national_average, linetype = "solid", color = "black", linewidth = .75) +
+    geom_hline(yintercept = very_high_thresh, linetype = "dashed", color = "darkred", linewidth = .75) +
+  facet_wrap(~site_number) +
+  labs(title = "Mortality Trends in SEPA sites breaching high threshold (2018-2014)",
+       x = "Date",
+       y = "Monthly Mortality (%)") +
+  theme_minimal()+
+      theme(legend.position = "none")
+
+```
+
+
+# Logic Model Step 4 - Idendifying presistent elevated mortailty in the model and data
+1. For the recurrent elevated mortality event is the categorized case the same for all relevant months within a stocking cycle?
+no - persistent elevated mortality doesn't exist - omit data point(s)
+yes - For the consecutive stocking cycle, is the categorized case the same for the relevant recurrent mortality cycle?
+no - persistent elevated mortality doesn't exist - omit data point(s)
+yes - persistent elevated mortality exist in model - export data for expert review
+
+### SEPA 2018-2024
+
+```{r towards-persistent-reasons-sepa-plot,fig.width=12, fig.height=12, echo=FALSE, warning=FALSE, message=FALSE}
+#️ Step-by-Step Processing
+# clean actions
+salmon_df_joined_2018 <- salmon_df_joined_2018 %>%
+   arrange(date) %>%
+   mutate(
+     action_cleaned = case_when(grepl("harvest", tolower(action)) ~ "Harvest Reported",
+       is.na(action) | action == "0" | trimws(action) == "" ~ "No Action Reported",
+        TRUE ~ "Other"
+     ),
+     action_cleaned = factor(action_cleaned, levels = c("Harvest Reported", "No Action Reported", "Other"))
+    )
+#1. combine reasons 
+#FHI reasons and reasons_1 likely contain overlapping or split data.
+
+salmon_df_joined_2018 <- salmon_df_joined_2018 %>%
+  mutate(
+    reason_combined = paste(top_cause_1, top_cause_2, top_cause_3, sep = "; "),
+    reason_combined = gsub("NA|^; |; NA", "", reason_combined),
+    reason_combined = tolower(trimws(reason_combined))
+  )
+#2. Clean & Recombine Reason Fields
+# Helper function to clean, split, sort and recombine causes
+clean_reason <- function(x) {
+  x %>%
+    str_split(";") %>%                      # Split into individual causes
+    map(~ str_trim(.x)) %>%                # Trim white space
+    map(~ tolower(.x)) %>%                 # Lowercase
+    map(~ .x[!is.na(.x) & .x != ""]) %>%    # Remove NA and empty strings
+    map(~ sort(unique(.x))) %>%            # De-duplicate and sort
+    map_chr(~ paste(.x, collapse = "; "))  # Recombine
+}
+
+# Apply the cleaner
+salmon_df_joined_2018 <- salmon_df_joined_2018 %>%
+  mutate(reason_combined_clean = clean_reason(reason_combined))
+
+#2. Aggregate Reasons per Stock Cycle
+#This step allows us to see patterns within cycles:
+
+cycle_mortality_pers <- salmon_df_joined_2018 %>%
+  filter(site_number %in% REM_sites, mortality_rate_final > high_thresh & high_event==TRUE & within_cycle_streak==TRUE & consec_cycle_flag==TRUE) %>%
+  group_by(site_number, stock_cycle, date) %>%
+  select(
+    site_number,
+    stock_cycle,
+    stock_cycle_month_n,
+    date,
+    month,
+    year,
+    mortality_rate,
+    adjusted_mortality_rate,
+    mortality_rate_final,
+    action,
+    reason_combined_clean
+     ) %>%
+  #filter(!is.na(reason_combined_clean) & reason_combined_clean != "") %>%
+  arrange(site_number, stock_cycle, desc(date))
+#write.csv(cycle_mortality_pers, "Expert_check_PEM_SEPAdata2018to2024.csv")
+#write.csv(salmon_df_joined_2018, "salmon_all_df_SEPAFHI_2018to2024.csv")
+
+
+#3. Compare Causes Between Cycles at a Site
+#This helps detect persistent vs shifting causes:
+
+#cycles_to_check_reason_towards_persistent <- cycle_mortality_pers %>%
+#  filter(site_number %in% reccurent_sites_2018_v1)
+
+high_mortality_summary <- cycle_mortality_pers %>%
+  group_by(site_number, stock_cycle, date, reason_combined_clean) %>%
+  summarise(
+    mortality_rate = sum(mortality_rate, na.rm=TRUE),
+    adjusted_mortality = sum(adjusted_mortality_rate, na.rm = TRUE),
+    mortality_rate_final =sum(mortality_rate_final, na.rm = TRUE),
+    any_action = any(action != "0"),
+    .groups = "drop"
+  )
+
+high_mortality_summary%>% gt() %>%
+  tab_header(title = "Recurrent Mortality - Reason Reported") %>%
+  fmt_number(columns = c(mortality_rate, adjusted_mortality), decimals = 2)
+
+write.csv(high_mortality_summary, "EC_Recurrent_Mortality_with_Reason_Reported_summary_data_SEPA_2018-2024.csv")
+
+```
+
+### simplify this plot 
+
+```{r, category-mapping,fig.width=12, fig.height=12, echo=FALSE, warning=FALSE, message=FALSE }
+
+
+#1. Function to map combined reasons to a set of high-level categories:
+# Clean and reclassify into main buckets
+# Function to map a single reason string to high-level categories
+map_reason_to_category <- function(reason_string) {
+  if (is.na(reason_string) || reason_string == "") return("Unknown")
+  
+  reasons <- unlist(str_split(reason_string, ";\\s*"))
+  categories <- unique(unlist(map(reasons, function(r) {
+    key <- str_trim(tolower(r))
+    matched <- reason_category_map[[key]]
+    if (is.null(matched)) return("other") else return(matched)
+  })))
+  
+  paste(sort(categories), collapse = "; ")
+}
+
+#2. Define a mapping from sub-reason phrases to 5 categories:
+# High-level category mapping table
+reason_category_map <- list(
+  "environmental" = "environmental",
+   "Environmental" = "environmental",
+  "Infectious diseases" = "infectious diseases",
+  "Handling and treatment" = "handling and treatment",
+  "Developmental"= "developmental",
+  "Gill health related" = "gill health related",
+  "Other" = "other",
+  "infectious diseases" = "infectious diseases",
+  "handling and treatment" = "handling and treatment",
+  "developmental"= "developmental",
+  "gill health related" = "gill health related",
+  "other" = "other"
+)
+# 3. Apply row-wise using `map_chr`
+towards_PEM <- cycle_mortality_pers %>%
+  mutate(
+    reason_category_combined = map_chr(reason_combined_clean, map_reason_to_category)
+  )
+
+
+# Step 4: Clean and un nest causes
+towards_PEM_unnested <- towards_PEM %>%
+  # Split reason_combined_clean into individual reasons
+  mutate(reason_split = str_split(reason_combined_clean, ";\\s*"),
+  n_causes = map_int(reason_split, length)) %>%
+  unnest(reason_split) %>%
+  mutate(
+    reason_split = tolower(str_trim(reason_split)),
+    high_level_reason = map_chr(reason_split, ~ {
+      reason_category_map[[.x]] %||% "other"
+    }), 
+    shared_mortality_rate = mortality_rate_final / n_causes  # distribute evenly across causes
+  ) %>%
+  group_by(site_number, stock_cycle, stock_cycle_month_n, date, high_level_reason) %>%
+  summarise(
+    total_mortality_rate = sum(mortality_rate_final),
+    avg_mortality_rate = mean(shared_mortality_rate),  # equally split contribution
+    .groups = "drop"
+  )
+
+
+str(towards_PEM_unnested)
+
+
+filtered_reasons <- towards_PEM_unnested %>%
+  # Count how many distinct cycles each high_level_reason appears in per site
+  group_by(site_number, high_level_reason) %>%
+  summarise(
+    num_cycles = n_distinct(stock_cycle),
+    .groups = "drop"
+  ) %>%
+  # Keep only those that appear in 2 or more cycles
+  filter(num_cycles >= 2)
+
+towards_PEM_filtered <- towards_PEM_unnested %>%
+  inner_join(
+    filtered_reasons %>% select(site_number, high_level_reason),
+    by = c("site_number", "high_level_reason")
+  )
+
+write.csv(towards_PEM_filtered, "ExpertChecking_Persistent_Mortality_with_Reason_Reported_summary_data_SEPA_2018-2024.csv")
+# Step 3: Plot stacked bars
+stacked_plot <- ggplot(towards_PEM_filtered, aes(
+  x = factor(stock_cycle),
+  y = avg_mortality_rate,
+  fill = high_level_reason
+)) +
+  geom_col() +
+  facet_wrap(~site_number, scales = "free_x") +
+  scale_fill_brewer(palette = "Set2", name = "Mortality Cause (High Level)") +
+  labs(
+    title = "Average Mortality by High-Level Cause per Stock Cycle",
+    x = "Stock Cycle",
+    y = "Avg Mortality Rate"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+      theme(legend.position = "right") +
+  theme(legend.position = "bottom")
+
+ggsave("SEPA_mortality_by_cause_stacked.png", stacked_plot, width = 14, height = 10)
+stacked_plot
+
+# Save as TIFF (publication-grade)
+ggsave("SEPA_mortality_by_cause_stacked.tiff", plot = stacked_plot,
+       width = 8, height = 6, dpi = 600, units = "in", compression = "lzw")
+stacked_plot_1 <- stacked_causes %>%
+   filter((site_number) ==  "FS0853")
+
+plot_site_C <-  ggplot(stacked_plot_1, aes(
+  x = factor(stock_cycle),
+  y = avg_mortality_rate,
+  fill = high_level_reason
+)) +
+  geom_col() +
+  #facet_wrap(~site_number, scales = "free_x") +
+  scale_fill_grey( name = "Mortality Cause (High Level)") +
+  labs(
+    title = "Site C",
+    x = "Stock Cycle",
+    y = "Avg Mortality Rate"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+      theme(legend.position = "right") +
+  theme(legend.position = "bottom")
+
+ggsave("SEPA_mortality_by_cause_stacked_siteC.png", plot_site_C, width = 14, height = 10)
+ggsave("SEPA_mortality_by_cause_stacked_siteC.tiff", plot = plot_site_C,
+       width = 8, height = 6, dpi = 600, units = "in", compression = "lzw")
+stacked_plot_2 <- stacked_causes %>%
+   filter((site_number) ==  "FS0656")
+plot_site_B <-  ggplot(stacked_plot_2, aes(
+  x = factor(stock_cycle),
+  y = avg_mortality_rate,
+  fill = high_level_reason
+)) +
+  geom_col() +
+  #facet_wrap(~site_number, scales = "free_x") +
+  scale_fill_grey(name = "Mortality Cause (High Level)") +
+  labs(
+    title = "Site B",
+    x = "Stock Cycle",
+    y = "Avg Mortality Rate"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+      theme(legend.position = "right") +
+  theme(legend.position = "bottom")
+
+ggsave("SEPA_mortality_by_cause_stacked_siteB.png", plot_site_B, width = 14, height = 10)
+ggsave("SEPA_mortality_by_cause_stacked_siteB.tiff", plot = plot_site_B,
+       width = 8, height = 6, dpi = 600, units = "in", compression = "lzw")
+
+```
+
+####
+# Persistent Evelavted Mortality - SEPA/FHI data 
+```{r, SJs-persistent-table-for-FHI-expert-checking}
+
+library(dplyr)
+
+# Step 1: flag consecutive months within the same stock cycle
+towards_PEM_flagged <- towards_PEM_unnested %>%
+  arrange(site_number, high_level_reason, stock_cycle, stock_cycle_month_n) %>%
+  group_by(site_number, high_level_reason, stock_cycle) %>%
+  mutate(
+    lag_month  = lag(stock_cycle_month_n),
+    lead_month = lead(stock_cycle_month_n),
+    consecutive_month_same_cycle =
+      (!is.na(lag_month)  & stock_cycle_month_n == lag_month + 1) |
+      (!is.na(lead_month) & lead_month == stock_cycle_month_n + 1)
+  ) %>%
+  ungroup() %>%
+  select(-lag_month, -lead_month)
+
+# Step 2: identify cycles that have consecutive months and appear in the next cycle
+# Build a table of cycles per site/reason
+cycle_table <- towards_PEM_flagged %>%
+  distinct(site_number, high_level_reason, stock_cycle, consecutive_month_same_cycle) %>%
+  filter(consecutive_month_same_cycle == TRUE) %>%  # only consider cycles with consecutive months
+  arrange(site_number, high_level_reason, stock_cycle) %>%
+  group_by(site_number, high_level_reason) %>%
+  mutate(
+    next_cycle = lead(stock_cycle),
+    consecutive_cycle = ifelse(!is.na(next_cycle) & (next_cycle - stock_cycle == 1), TRUE, FALSE)
+  ) %>%
+  # propagate the flag to both cycles in the pair
+  mutate(
+    consecutive_cycle = consecutive_cycle | lag(consecutive_cycle, default = FALSE)
+  ) %>%
+  ungroup() %>%
+  select(site_number, high_level_reason, stock_cycle, consecutive_cycle)
+
+# Step 3: join back to all rows
+towards_PEM_flagged <- towards_PEM_flagged %>%
+  left_join(cycle_table,
+            by = c("site_number", "high_level_reason", "stock_cycle")) %>%
+  mutate(
+    # if no match in cycle_table, consecutive_cycle is FALSE
+    consecutive_cycle = ifelse(is.na(consecutive_cycle), FALSE, consecutive_cycle),
+    consecutive_reason_flag = consecutive_month_same_cycle & consecutive_cycle
+  )
+
+PEM_sites_1<- unique(towards_PEM_flagged$site_number[towards_PEM_flagged$consecutive_reason_flag==TRUE])
+
+towards_PEM_flagged_dat <- towards_PEM_flagged %>% filter(consecutive_reason_flag==TRUE) %>%  select(
+    site_number,
+    stock_cycle,
+    stock_cycle_month_n,
+    date, high_level_reason,
+    total_mortality_rate)
+towards_PEM_flagged_dat_unique<-unique(towards_PEM_flagged_dat)
+write.csv(towards_PEM_flagged_dat_unique,"Expert_check_PEM_unnested.csv")
+
+##########################TRUE
+
+
+towards_cycle_mortality_PEM <- salmon_df_joined_2018 %>% 
+  inner_join(
+    towards_PEM_flagged_dat_unique %>%
+      select(site_number, stock_cycle, stock_cycle_month_n, date),
+    by = c("site_number", "stock_cycle", "stock_cycle_month_n", "date")
+  ) %>%
+  select(
+    site_number,
+    stock_cycle,
+    stock_cycle_month_n,
+    date,
+    month,
+    year,
+    mortality_rate_final,
+    action,
+    reason_combined_clean,
+    Freetext_reasons,
+    Freetext_unexplained_obs,
+    Freetext_Additional_info,
+    Freetext_action_taken_fhi,
+    All_Mortality_Event_No
+  ) %>%
+  arrange(site_number, stock_cycle, desc(date))
+
+write.csv(towards_cycle_mortality_PEM,"Expert_check_PEM_nested_SEPA_FHIdata2018to2024.csv")
+
+
+
+# Step 4: Clean and un nest causes
+towards_cycle_mortality_PEM_unnested <- salmon_df_joined_2018 %>%
+  right_join(
+    towards_PEM_flagged_dat,
+    by = c("site_number", "stock_cycle", "stock_cycle_month_n", "date")
+  ) %>%
+  select(
+    site_number,
+    stock_cycle,
+    stock_cycle_month_n,
+    date,
+    month,
+    year,
+    mortality_rate_final,
+    total_mortality_rate,    
+    high_level_reason,       
+    action,
+    reason_combined_clean,
+    Freetext_reasons,
+    Freetext_unexplained_obs,
+    Freetext_Additional_info,
+    Freetext_action_taken_fhi,
+    All_Mortality_Event_No
+  ) %>%
+  arrange(site_number, stock_cycle, desc(date))
+
+
+
+write.csv(towards_cycle_mortality_PEM_unnested,"Expert_check_PEM_unnested_SEPA_FHIdata2018to2024.csv")
+
+
+
+```
+
+
+
+Note that this data is preliminary and still requires QA/QC for full inference.
+
+
+We’ve define “persistent” causes as those that:
+Appear in ≥2 distinct stock cycles at the same site,
+AND contribute significantly to average mortality (threshold set at "95% high 5.65%").
+```{r persistent-reasons-sepa-plot-notusing,fig.width=12, fig.height=12, echo=FALSE, warning=FALSE, message=FALSE}
+#pivot_causes <- cycle_mortality_causes_cat_c %>%
+#  group_by(site_number, reason_combined_clean) %>%
+#  summarise(
+#    n_cycles = n_distinct(stock_cycle),
+#    total_mortality = sum(total_mortality),
+#    average_mortality_rate = mean(average_mortality_rate)
+#  ) %>%
+#  arrange(desc(n_cycles), desc(average_mortality_rate)) 
+
+#persistent_threshold <- 2  # min number of cycles to be considered persistent
+#mortality_threshold <- high_thresh  # optional: min avg mortality rate to flag
+
+#persistent_flags <- pivot_causes %>%
+##  mutate(
+#    is_persistent = n_cycles >= persistent_threshold & average_mortality_rate #>= mortality_threshold
+#  )
+
+#ggplot(persistent_flags, aes(x = site_number, y = #reorder(reason_combined_clean, average_mortality_rate))) +
+#  geom_tile(aes(fill = is_persistent)) +
+#  scale_fill_manual(values = c("TRUE" = "darkred", "FALSE" = "grey80")) +
+#  labs(
+#    title = "Flagged Persistent Mortality Causes by Site",
+#    x = "Site",
+#    y = "Mortality Cause",
+#    fill = "Persistent"
+#  ) +
+#  theme_minimal() +
+#  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+We’ve define “persistent” causes as those that:
+Appear in ≥2 distinct stock cycles at the same site with at least one consecutive run,
+AND contribute significantly to mortality (threshold set at high - which means monthly mortatily over 5.65%").
+
+```{r persistent-in-consecutive-cycles-reasons-sepa-plot,fig.width=12, fig.height=12, echo=FALSE, warning=FALSE, message=FALSE}
+# Ensure data is sorted and consecutive cycle logic applied
+consecutive_persistence <- stacked_causes %>%
+   filter(total_mortality_rate > high_thresh) %>% # Adjust threshold if needed
+  select(site_number, stock_cycle, high_level_reason, avg_mortality_rate, total_mortality_rate) %>%
+  arrange(site_number, high_level_reason, stock_cycle) %>%
+  group_by(site_number, high_level_reason) %>%
+  mutate(
+    cycle_diff = stock_cycle - lag(stock_cycle),
+    is_consecutive = ifelse(cycle_diff == 1, TRUE, FALSE)
+  ) %>%
+  summarise(
+    total_consecutive_pairs = sum(is_consecutive, na.rm = TRUE),
+    n_cycles = n_distinct(stock_cycle),
+    cycle_vector = list(sort(unique(stock_cycle))),
+    list_mortality_rates = list(sort(unique(avg_mortality_rate))),
+    average_mortality_rate = mean(avg_mortality_rate, na.rm = TRUE),
+    total_mortality_rate = sum(avg_mortality_rate, na.rm=TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    is_persistent = total_consecutive_pairs > 0   
+  )
+#write.csv(stacked_causes, "stacked_causes_check_oct25.csv") 
+
+#  Plot updated results
+persistent_flag_plot<-ggplot(consecutive_persistence, aes(x = site_number, y = reorder(high_level_reason, total_mortality_rate))) +
+  geom_tile(aes(fill = is_persistent)) +
+  scale_fill_manual(values = c("TRUE" = "darkred", "FALSE" = "grey80")) +
+  labs(
+    title = "Flagged Persistent Mortality Causes (≥2 Consecutive Cycles)",
+    x = "Site",
+    y = "Mortality Cause",
+    fill = "Persistent"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("SEPA_persistent_flag_plot.png", plot =persistent_flag_plot, width = 15, height = 12, units = "in")
+ggsave("SEPA_persistent_flag_plot.tiff", plot =persistent_flag_plot, width = 15, height = 12, units = "in")
+persistent_flag_plot
+
+
+RC_Cause<-consecutive_persistence %>%
+  select(site_number, high_level_reason, average_mortality_rate, cycle_vector) %>%
+  mutate(
+    cycle_vector = sapply(cycle_vector, paste, collapse = ", ")
+  ) 
+
+write.csv(RC_Cause, "Expert_check_summary_of_model_identified_PEM_sites_cycles_causes.csv")
+ 
+ # RC_Cause%>% gt() %>%
+#  tab_header(title = "Recurrent Persistent Mortality Causes") %>%
+#  fmt_number(columns = average_mortality_rate, decimals = 2)
+
+
+consecutive_persistence %>%
+  filter(is_persistent) %>%
+  arrange(desc(n_cycles), desc(average_mortality_rate)) %>%
+  gt() %>%
+  tab_header(title = "Persistent Elevated Mortality Causes") %>%
+  fmt_number(columns = average_mortality_rate, decimals = 2)
+
+length(unique(consecutive_persistence$site_number))
+
+consecutive_persistence_only <- consecutive_persistence %>%
+  filter(is_persistent==TRUE)
+
+
+pers_plot<-ggplot(consecutive_persistence_only, aes(x = site_number, y = reorder(high_level_reason, average_mortality_rate))) +
+  geom_tile(aes(fill = average_mortality_rate)) +
+  scale_fill_viridis_c() +
+  labs(
+    title = "Persistent and Recurrent Elevated Mortality Causes by Site",
+    x = "Site",
+    y = "Cause",
+    fill = "Avg Mortality"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+ggsave("SEPA_2018_2024_pers_plot_95_Oct2025.png", plot = pers_plot, width = 25, height = 20, units = "in")
+pers_plot
+
+library(gt)
+
+persistent_table_SEPA2018_2024 <- consecutive_persistence_only %>%
+  select(site_number, high_level_reason, #average_mortality_rate, 
+         n_cycles, cycle_vector, is_persistent, total_consecutive_pairs) %>%
+  mutate(
+    cycle_vector = sapply(cycle_vector, paste, collapse = ", ")
+  #  total_consecutive_pairs = sum(total_consecutive_pairs),
+   # is_persistent = sapply(is_persistent, paste, collapse = ", ")
+  ) 
+write.csv(persistent_table_SEPA2018_2024, "Expert_check_summary_of_model_identified_PEM_sites_cycles_SEPA_morts.csv")
+
+  persistent_table_SEPA2018_2024 %>% gt() %>%
+  tab_header(title = "Recurrent Persistent Elevated Mortality Causes SEPA 2018-2024") %>%
+  fmt_number(columns = is_persistent)
+
+  length(unique(persistent_table_SEPA2018_2024$site_number))
+
+```
+
+#```{r, summary-persistent-elevated-sepa18-24-plot, fig.width=12, fig.height=12,echo=FALSE, warning=FALSE, message=FALSE}
+
+# Helper function to detect close recurrence
+is_recurrent <- function(cycles, min_cycles = 2, max_gap = 1) {
+  if (length(cycles) < min_cycles) return(FALSE)
+  cycles <- sort(unique(cycles))
+  run_lengths <- rle(c(diff(cycles) <= max_gap))
+  any(run_lengths$lengths[run_lengths$values] >= (min_cycles - 1))
+}
+
+# Apply to your cause-cycle data
+persistent_recurrent_flags_1 <- stacked_causes %>%
+  group_by(site_number, high_level_reason) %>%
+  summarise(
+    cycle_vector = list(sort(unique(stock_cycle))),
+    avg_mortality_rate = mean(avg_mortality_rate),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    is_persistent_recurrent = map_lgl(cycle_vector, ~is_recurrent(.x, min_cycles = 2, max_gap = 1)), 
+    is_elevated_mortality = (avg_mortality_rate>high_thresh),
+  ) %>%
+  filter(is_persistent_recurrent, is_elevated_mortality) %>%
+  arrange(site_number, desc(avg_mortality_rate))
+
+pers_plot<-ggplot(persistent_recurrent_flags_1, aes(x = site_number, y = reorder(high_level_reason, avg_mortality_rate))) +
+  geom_tile(aes(fill = avg_mortality_rate)) +
+  scale_fill_viridis_c() +
+  labs(
+    title = "Persistent and Recurrent Elevated Mortality Causes by Site",
+    x = "Site",
+    y = "Cause",
+    fill = "Avg Mortality"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+ggsave("SEPA_2018_2024_pers_plot_95.png", plot = pers_plot, width = 25, height = 20, units = "in")
+pers_plot
+
+library(gt)
+
+persistent_table_SEPA2018_2024 <- persistent_recurrent_flags_1 %>%
+  select(site_number, high_level_reason, avg_mortality_rate, cycle_vector) %>%
+  mutate(
+    cycle_vector = sapply(cycle_vector, paste, collapse = ", ")
+  ) 
+write.csv(persistent_table_SEPA2018_2024, "persistent_table_SEPA2018_2024.csv")
+
+  persistent_table_SEPA2018_2024 %>% gt() %>%
+  tab_header(title = "Recurrent Persistent Mortality Causes SEPA 2018-2024") %>%
+  fmt_number(columns = avg_mortality_rate, decimals = 2)
+
+  length(unique(persistent_table_SEPA2018_2024$site_number))
+#```
+### Data for checking the sites flagged
+```{r, persistent-reasons-sepa-plot, fig.width=12, fig.height=12,echo=FALSE, warning=FALSE, message=FALSE}
+
+str(fhi_monthly_summary_plus)
+str(salmon_df_joined_2018)
+str(persistent_recurrent_flags_1)
+
+# Combine using full joins on 'site_number', 'year', and 'month' where appropriate
+# Join datasets
+combined_SEPA_2018_df <- fhi_monthly_summary_plus %>%
+  full_join(salmon_df_joined_2018, by = c("site_number", "year", "month"))
+
+# Sites to keep
+site_data_list_to_check <- unique(persistent_recurrent_flags_1$site_number)
+site_data_list_to_check %in% salmon_df_joined_2018$site_name
+companies <- subset(salmon_df_joined_2018, site_number == site_data_list_to_check, select = operator)
+unique(companies)
+companies <- salmon_df_joined_2018 %>%
+  filter(site_name == site_data_list_to_check) %>%
+  select(operator)
+
+# Filter before splitting
+filtered_combined_df <- combined_SEPA_2018_df %>%
+  filter(site_number %in% site_data_list_to_check)
+
+# Split by site
+site_data_list <- filtered_combined_df %>%
+  group_split(site_number, .keep = TRUE) %>%
+  set_names(filtered_combined_df %>% pull(site_number) %>% unique())
+
+
+
+# Create directory
+dir.create("site_data_exports_check_wc21July", showWarnings = FALSE)
+
+# Export only selected sites
+walk2(site_data_list, names(site_data_list), ~ {
+  write.csv(.x, file = file.path("site_data_exports_check_wc21July", paste0("site_", .y, ".csv")), row.names = FALSE)
+})
+print(names(site_data_list))
+ #site_data_list[["FS1262"]]
+
+```
+### Persistence in Reccuring Mortality SEPA 2003-2024
+
+### Persistence in Reccuring Mortality SalScot 2018-2024
+Note that this data is preliminary and still requires QA/QC for full 
+
+pc_check_for_persistent_sites_18_24 
+### simplify this plot 
+
+```{r, category-mapping-salscot,fig.width=12, fig.height=12, echo=FALSE, warning=FALSE, message=FALSE }
+
+# Define the mapping dictionary
+reason_category_map <- list(
+  "environmental" = "environmental",
+   "Environmental" = "environmental",
+  "Infectious diseases" = "infectious diseases",
+  "Handling and treatment" = "handling and treatment",
+  "Developmental"= "developmental",
+  "Gill health related" = "gill health related",
+  "Other" = "other",
+  "infectious diseases" = "infectious diseases",
+  "handling and treatment" = "handling and treatment",
+  "developmental"= "developmental",
+  "gill health related" = "gill health related",
+  "other" = "other"
+)
+
+# Helper function for mapping with fallback
+map_reason_to_category <- function(reason_string) {
+  reason_string <- tolower(str_trim(reason_string))
+  matched <- reason_category_map[[reason_string]]
+  if (is.null(matched)) return("Other") else return(matched)
+}
+
+
+# Combine, clean, and split causes
+
+stacked_reasons_pc <- pc.dat %>%
+  mutate(
+    combined_reason = paste(Grouped_Mortality_Cause_1_Use, Grouped_Mortality_Cause_2_Use,
+                            Grouped_Mortality_Cause_3_Use, sep = "; "),
+    combined_reason = str_replace_all(combined_reason, "\\bNA\\b|^; |; NA|^;|;$", ""),
+    combined_reason = str_trim(combined_reason),
+    reason_split = str_split(combined_reason, ";\\s*"),  # Split on ";"
+    n_causes = map_int(reason_split, length)
+  ) %>%
+  unnest(reason_split) %>%  # Stack into multiple rows
+  filter(reason_split != "", !is.na(reason_split)) %>%
+  mutate(reason_split = str_to_title(str_trim(reason_split)),
+         high_level_reason = map_chr(reason_split, ~ reason_category_map[[.x]] %||% "Other"),
+    shared_mortality_rate = monthly_mortality / n_causes  # distribute evenly across causes
+  ) %>%
+  group_by(site_number, id, date, high_level_reason, reason_split) %>%
+  summarise(
+    total_mortality_rate = sum(shared_mortality_rate, na.rm = TRUE),
+    avg_mortality_rate = mean(shared_mortality_rate, na.rm = TRUE),
+    count = n(),
+    .groups = "drop"
+  )  # Optional: Title-case
+
+# Apply to your stacked dataset
+stacked_reasons_categorised <- stacked_reasons_pc %>%
+  mutate(
+    high_level_reason = map_chr(reason_split, map_reason_to_category)
+  )
+
+stacked_reasons_categorised %>%
+  count(reason_split, high_level_reason, sort = TRUE)
+
+
+salscot_cycles_to_check_reason_towards_persistent <- stacked_reasons_pc %>%
+  filter(site_number %in% pc_check_for_persistent_sites_18_24)
+
+data_to_plot_stacked_reasons_pc_elevated <- salscot_cycles_to_check_reason_towards_persistent %>% filter(avg_mortality_rate > high_thresh) 
+
+stacked_reasons_pc_elevated <-
+ggplot(data_to_plot_stacked_reasons_pc_elevated, 
+       aes(x = id, y = avg_mortality_rate, fill = reason_split)) +
+  geom_col() +
+  facet_wrap(~ site_number, scales = "free_x") +
+  labs(title = "Mortality by High-Level Cause",
+       y = "Mortality Rate", x = "Stock Cycle", fill = "Cause") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+ggsave("SaScot_mortality_by_cause_stacked.png", stacked_reasons_pc_elevated, width = 14, height = 10)
+stacked_reasons_pc_elevated
+```
+
+### SVEPM Sample Data
+
+```{r run-11-sites,fig.width=12, fig.height=12, echo=FALSE, warning=FALSE, message=FALSE }}
+subset_for_SVEPM <- salmon_df_joined_2018 %>% filter(site_number == c("FS0088" ,"FS0617",
+                                                                      "FS0057", "FS0937",
+                                                                      "FS1017", "FS1056",
+                                                                      "FS0903",
+                                                                      "FS0413",# "FS0853",
+                                                                      "FS0656", "FS0433",
+                                                                      "FS0875"
+                                                                      ))
+
+
+
+summary_stats_svepm <- subset_for_SVEPM %>%
+    dplyr::reframe( n_observations = n(),
+                    mean = round(mean(mortality_rate_final, na.rm = TRUE),2),
+                    median = round(median(mortality_rate_final, na.rm = TRUE),2),
+                    IQR = round(IQR(mortality_rate_final, na.rm = TRUE),2),
+                     p95 = round(quantile(mortality_rate_final, 0.95, na.rm = TRUE),2),
+                     p99 = round(quantile(mortality_rate_final, 0.99, na.rm = TRUE),2)) %>%
+  gt() %>%
+  tab_header(title = "Mortality Summary - subset 11 sites SEPA data")
+
+summary_stats_svepm                                                                  
+
+```
+### Report on all data
+```{r run-report,fig.width=12, fig.height=12, echo=FALSE, warning=FALSE, message=FALSE }}
+
+
+```
+
+
+SEPA data - control charts -> see folder "SEPA_mortality_plots"
+```{r control-charts-ggplot, echo=FALSE, warning=FALSE, message=FALSE}
+
+national_average <-mean(salmon_df_active$mortality_rate,  na.rm = TRUE)
+#mid_thresh <- quantile(salmon_df_active$mortality_rate, 0.75, na.rm = TRUE)
+high_thresh <- quantile(salmon_df_active$mortality_rate, 0.95, na.rm = TRUE)
+very_high_thresh <- quantile(salmon_df_active$mortality_rate, 0.99, na.rm = TRUE)
+
+output_dir <- "SEPA_mortality_plots_finalrun_Oct25"  # folder to save plots
+dir.create(output_dir, showWarnings = FALSE)  # create folder if not exists
+#site_list <- reccurent_sites_2018_v1
+site_list <- unique(salmon_df_joined_2018$site_number)
+plots <- list()
+
+for (i in seq_along(site_list)) {
+  site <- site_list[i]
+  
+ temp <- salmon_df_joined_2018 %>%
+    filter(site_number == site & !is.na(mortality_rate)) %>%
+    arrange(date) %>%
+    mutate(
+      action_cleaned = case_when(
+        grepl("harvest", tolower(action)) ~ "Harvesting",
+        is.na(action) | action == "0" | trimws(action) == "" ~ "No Action Reported",
+        TRUE ~ "Other"
+      ),
+      action_cleaned = factor(action_cleaned, levels = c("Harvesting", "No Action Reported", "Other"))
+    )
+  
+  if (nrow(temp) > 24) {
+    plots[[i]] <- ggplot(temp, aes(x = date, y = mortality_rate)) +
+      geom_point(aes(shape = action_cleaned, color = factor(stock_cycle)), size = 2) +
+      geom_point(aes(x = date, y = adjusted_mortality_rate,  shape = "adjusted mortality rate", size = 2, alpha = 0.6,  color = factor(stock_cycle))) +
+      geom_hline(yintercept = high_thresh, linetype = "dashed", color = "red", size = 1) +
+      geom_hline(yintercept = national_average, linetype = "solid", color = "black", size = 0.75) +
+      geom_hline(yintercept = very_high_thresh, linetype = "dashed", color = "darkred", size = 0.75) +
+      labs(
+        title = paste("Mortality Control Chart -", site),
+        x = "Date", y = "Mortality Rate (%)",
+        shape = "Action Reported",
+        color = "Stock Cycle"
+      ) +
+      theme_minimal() +
+      theme(legend.position = "right")
+    
+    # Save each plot
+    ggsave(
+      filename = file.path(output_dir, paste0("mortality_chart_", site, ".png")),
+      plot = plots[[i]],
+      width = 14, height = 10, dpi = 300
+    )
+ ggsave(
+      filename = file.path(output_dir, paste0("mortality_chart_", site, ".tiff")),
+      plot = plots[[i]],
+    width = 8, height = 6, dpi = 600, units = "in", compression = "lzw"
+    )   
+    
+  }
+}
+
+
+# Display all plots
+#plots
+```
+
+
+```{r control-charts-ggplot-BW, echo=FALSE, warning=FALSE, message=FALSE}
+
+national_average <-mean(salmon_df_active$mortality_rate,  na.rm = TRUE)
+mid_thresh <- quantile(salmon_df_active$mortality_rate, 0.75, na.rm = TRUE)
+high_thresh <- quantile(salmon_df_active$mortality_rate, 0.95, na.rm = TRUE)
+very_high_thresh <- quantile(salmon_df_active$mortality_rate, 0.99, na.rm = TRUE)
+
+output_dir <- "SEPA_mortality_plots_BW_for_SVEPM"  # folder to save plots
+dir.create(output_dir, showWarnings = FALSE)  # create folder if not exists
+#site_list <- reccurent_sites_2018_v1
+#site_list <- unique(salmon_df_joined_2018$site_number)
+site_list <- c("FS0088", "FS0853", "FS0656")
+plots <- list()
+
+for (i in seq_along(site_list)) {
+  site <- site_list[i]
+  
+ temp <- salmon_df_joined_2018 %>%
+    filter(site_number == site & !is.na(mortality_rate)) %>%
+    arrange(date) %>%
+    mutate(
+      action_cleaned = case_when(
+        grepl("harvest", tolower(action)) ~ "Harvesting",
+        is.na(action) | action == "0" | trimws(action) == "" ~ "No Action Reported",
+        TRUE ~ "Other"
+      ),
+      action_cleaned = factor(action_cleaned, levels = c("Harvesting", "No Action Reported", "Other"))
+    )
+  
+  if (nrow(temp) > 24) {
+    plots[[i]] <- ggplot(temp, aes(x = date, y = mortality_rate)) +
+      geom_point(aes(shape=factor(stock_cycle))) +
+      geom_hline(yintercept = high_thresh, linetype = "dotdash", color = "grey5", size = 1) +
+      geom_hline(yintercept = national_average, linetype = "solid", color = "grey5", size = 0.75) +
+      geom_hline(yintercept = very_high_thresh, linetype = "dashed", color = "grey5", size = 0.75) +
+      labs(
+        title = paste("Mortality Control Chart -", site),
+        x = "Date", y = "Mortality Rate (%)",
+        shape = "Stock Cycle"#,
+        #color = "Stock Cycle"
+      ) +
+      theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 20),
+    axis.title = element_text(size = 20),
+    legend.title = element_text(size = 20),
+    legend.text = element_text(size = 20),
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5)) +
+      theme(legend.position = "right")
+    
+    # Save each plot
+    ggsave(
+      filename = file.path(output_dir, paste0("BW_mortality_chart_", site, ".png")),
+      plot = plots[[i]],
+      width = 14, height = 10, dpi = 300
+    )
+     ggsave(
+      filename = file.path(output_dir, paste0("mortality_chart_", site, ".tiff")),
+      plot = plots[[i]],
+    width = 8, height = 6, dpi = 600, units = "in", compression = "lzw"
+    )   
+  }
+}
+
+# Display all plots
+#plots
+```
+
+## Recurring High Mortality Detection -Salmon Scotland (2018-2024)
+```{r recurring-high-mortality, fig.width=12, fig.height=12, echo=FALSE}
+mort_p95 <- quantile(pc.dat$monthly_mortality, 0.95, na.rm = TRUE)
+print(mort_p95)
+mid_thresh <- quantile(salmon_df_active$mortality_rate, 0.75, na.rm = TRUE)
+high_thresh <- quantile(salmon_df_active$mortality_rate, 0.95, na.rm = TRUE)
+very_high_thresh <- quantile(salmon_df_active$mortality_rate, 0.99, na.rm = TRUE)
+
+ # Step 2 - classify data
+pc_salmon_flagged_18_24 <- pc.dat %>%
+  mutate(high_event = monthly_mortality >= high_thresh) %>% 
+  arrange(site_number, date) %>%
+  group_by(site_number) %>%
+  mutate(
+    month_id = row_number(),  # helps with indexing
+    high_event_numeric = as.integer(high_event),
+  ) %>%
+  ungroup()
+
+  
+detect_streaks <- function(x) {
+  r <- rle(x)
+  streaks <- rep(r$lengths >= 2 & r$values, r$lengths)
+  return(streaks)
+}
+
+pc_salmon_flagged_18_24 <- pc_salmon_flagged_18_24 %>%
+  group_by(site_number) %>%
+  mutate(consec_streak = detect_streaks(high_event)) %>%
+  ungroup()
+
+# Step 3: Count exceedances per stock_cycle
+pc_cycle_level_flags_18_24 <- pc_salmon_flagged_18_24 %>%
+  group_by(site_number, id) %>%
+  summarise(
+    cycle_exceed_high = any(high_event, na.rm = TRUE),
+    cycle_has_streak = any(consec_streak, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Step 4: Summarise at site level
+pc_classification_summary_18_24 <- pc_cycle_level_flags_18_24 %>%
+  arrange(site_number, id) %>%
+  group_by(site_number) %>%
+  mutate(
+    # Flag whether current and previous cycles both had streaks
+    has_streak = cycle_has_streak,
+    streak_lag = lag(cycle_has_streak, default = FALSE),
+    consecutive_streak = has_streak & streak_lag
+  ) %>%
+  summarise(
+    total_cycles_high = sum(cycle_exceed_high, na.rm = TRUE),
+    recurring_streak_cycles = sum(cycle_has_streak, na.rm = TRUE),
+    has_consecutive_recurring_streaks = any(consecutive_streak, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    category = case_when(
+      has_consecutive_recurring_streaks ~ "b. sites with consecutive threshold breaches",
+      !has_consecutive_recurring_streaks ~ "a. sites which do not have consecutive cycles with recurring threshold breaches",
+      TRUE ~ "Unclassified"
+    )
+  )  
+#summary(classification_summary)
+pc_classification_summary_18_24 %>%
+  count(category) %>%
+  gt() %>%
+  tab_header(title = "Number of sites in each recurring classification level SalScot 2018-2024")
+
+#print(summary(as.factor((classification_summary$total_exceed))))
+
+print(summary(as.factor(pc_classification_summary_18_24$total_exceed_high)))
+
+# Filter classification
+pc_check_for_persistent_sites_18_24 <- pc_classification_summary_18_24 %>%
+  filter(category %in% c("b. sites with consecutive threshold breaches")) %>%
+  pull(site_number)
+
+```
+
+### compare mortality values sepa and Salscot
+```{r data-dot-plots, echo=FALSE}
+# Join datasets
+combined_SEPA_SALSCOT_2018_df <- pc_salmon_flagged_18_24 %>%
+  full_join(salmon_df_joined_2018, by = c("site_number", "year", "date"))
+
+plot.new()
+plot(combined_SEPA_SALSCOT_2018_df$monthly_mortality, combined_SEPA_SALSCOT_2018_df$mortality_rate, xlab="SAL SCOT reported mortality (%)", ylab= "SEPA reported mortality (%)" )
+abline(v=5.684227, add=T, col="red")
+abline(h=5.684227, add=T, col="red")
+abline(0,1, add=T, col="yellow")
+points(combined_SEPA_SALSCOT_2018_df$total_mortality_rate_fhi, combined_SEPA_SALSCOT_2018_df$mortality_rate, col = "blue", add=T)
+points(combined_SEPA_SALSCOT_2018_df$monthly_mortality, combined_SEPA_SALSCOT_2018_df$total_mortality_rate_fhi, col = "lightblue", add=T)
+res <- combined_SEPA_SALSCOT_2018_df %>% mutate("CorrectOrNot" = ifelse(monthly_mortality == mortality_rate, "Correct","Incorrect"))
+
+res <- combined_SEPA_SALSCOT_2018_df %>% mutate("CorrectOrNot" = ifelse(round(monthly_mortality,0) == round(mortality_rate,0), "Correct","Incorrect"))
+
+summary(as.factor(res$CorrectOrNot))
+
+res$diff_morts <- res$monthly_mortality - res$mortality_rate
+summary(res$diff_morts[res$CorrectOrNot=="Incorrect"])
+plot(res$diff_morts[res$CorrectOrNot=="Incorrect" & res$diff_morts > 1 | res$diff_morts < - 1 ])
+summary(res$diff_morts[res$CorrectOrNot=="Incorrect" & res$diff_morts > 2 | res$diff_morts < - 2 ])
+length((res$diff_morts[res$CorrectOrNot=="Incorrect" & res$diff_morts > 2 | res$diff_morts < - 2 ]))
+site_list <- unique(salmon_df_joined_2018$site_number)
+
+combined_SEPA_SALSCOT_2018_df$diff_morts <- combined_SEPA_SALSCOT_2018_df$monthly_mortality - combined_SEPA_SALSCOT_2018_df$mortality_rate 
+res <- combined_SEPA_SALSCOT_2018_df %>% mutate("CorrectOrNot" = ifelse(combined_SEPA_SALSCOT_2018_df$diff_morts > 2 | combined_SEPA_SALSCOT_2018_df$diff_morts < - 2, "Incorrect","Correct"))
+
+summary(as.factor(res$CorrectOrNot))
+summary(res$diff_morts[res$CorrectOrNot=="Incorrect"])
+dev.off()
+
+write.csv(res, "./fulldatasetdump_salscot_sepa_fhi.csv")
+write.csv(salmon_df_joined_2018, "./SEPA_FhiDatadump.csv")
+write.csv(pc_salmon_flagged_18_24, "./Salscotdatadump.csv")
+
+```
+
+#Make data set for expert checking
+``` {r data-print-out, echo=FALSE}
+
+head(res)
+```
+
+# make control charts for SalScot data
+```{r control-charts-ggplot, echo=FALSE, warning=FALSE, message=FALSE}
+
+national_average <-mean(salmon_df_active$mortality_rate,  na.rm = TRUE)
+mid_thresh <- quantile(salmon_df_active$mortality_rate, 0.75, na.rm = TRUE)
+high_thresh <- quantile(salmon_df_active$mortality_rate, 0.95, na.rm = TRUE)
+very_high_thresh <- quantile(salmon_df_active$mortality_rate, 0.99, na.rm = TRUE)
+
+output_dir <- "SEPA_SALSCOT_mortality_plots_allsites"  # folder to save plots
+dir.create(output_dir, showWarnings = FALSE)  # create folder if not exists
+#site_list <- reccurent_sites_2018_v1
+
+plots <- list()
+
+for (i in seq_along(site_list)) {
+  site <- site_list[i]
+
+  temp <- combined_SEPA_SALSCOT_2018_df %>%
+    filter(site_number == site & !is.na(mortality_rate)) %>%
+    arrange(date) %>%
+    mutate(
+      action_cleaned = case_when(
+        grepl("harvest", tolower(action)) ~ "Harvesting",
+        is.na(action) | action == "0" | trimws(action) == "" ~ "No Action Reported",
+        TRUE ~ "Other"
+      ),
+      action_cleaned = factor(action_cleaned, levels = c("Harvesting", "No Action Reported", "Other"))
+    )  
+
+  if (nrow(temp) > 24) {
+    plots[[i]] <- ggplot(temp, aes(x = date, y = mortality_rate)) +
+      geom_point(aes(shape = action_cleaned, color = factor(stock_cycle)), size = 2) +
+      geom_point(aes(x = date, y = adjusted_mortality_rate,  shape = "adjusted mortality rate", size = 2, alpha = 0.6,  color = factor(stock_cycle))) +
+      geom_point( aes(x = date, y = monthly_mortality, color = id))  +
+       geom_hline(yintercept = high_thresh, linetype = "dashed", color = "red", size = 1) +
+      geom_hline(yintercept = national_average, linetype = "solid", color = "black", size = 0.75) +
+      geom_hline(yintercept = very_high_thresh, linetype = "dashed", color = "darkred", size = 0.75) +
+      labs(
+        title = paste("Mortality Control Chart -", site),
+        x = "Date", y = "Mortality Rate (%)",
+        shape = "Action Reported",
+        color = "Stock Cycle"
+      ) +
+      theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+      theme(legend.position = "right") +
+      theme(legend.position = "right")
+    
+    # Save each plot
+    ggsave(
+      filename = file.path(output_dir, paste0("mortality_chart_", site, ".png")),
+      plot = plots[[i]],
+      width = 14, height = 10, dpi = 300
+    )
+  }
+}
+
+# Display all plots
+plots
+```
+### Compare recurring FS numbers between SalScot and SEPA for sites recurring in both datasets (2018-2024)
+
+```{r compare-high-cycles, fig.width=12, fig.height=12,echo=FALSE}
+#salscot_high_cycles <- pc_check_for_persistent_sites_18_24 %>%
+#  count(site_number) %>%
+#  filter(n > 1) %>%
+#  pull(site_number) # Salcot
+print(paste0("SalScot Site numbers with reccurent mortality in more than 1 production cycle (2018 - 2024)"))
+pc_check_for_persistent_sites_18_24
+print(paste0("SEPA Site numbers with reccurent mortality in more than 1 production cycle (2003 - 2024)"))
+check_for_persistent_sites_03_24 # cat C Sepa
+print(paste0("SEPA Site numbers with reccurent mortality in more than 1 production cycle (2018 - 2024)"))
+reccurent_sites_2018_v1
+
+
+print(paste0("Common site numbers with reccurent mortality in more than 1 production cycle (2018 - 2024)"))
+common_sites <- intersect(reccurent_sites_2018_v1, pc_check_for_persistent_sites_18_24)
+
+common_sites
+
+common_sites_v1 <- intersect(pc_check_for_persistent_sites_18_24, reccurent_sites_2018_v1)
+
+sepa_common_sites <- intersect(check_for_persistent_sites_03_24,reccurent_sites_2018_v1)
+
+common_sites
+
+sepa_common_sites
+```
+### Visualising Recurring High Mortality Cycles Sal Scot (2018-2024)
+
+```{r highlight-high-cycles,fig.width=12, fig.height=12, echo=FALSE}
+# Choose top high-mortality cycles
+ggplot(filter(pc.dat, site_number %in% pc_check_for_persistent_sites_18_24), aes(x = date, y = monthly_mortality, color = id)) +
+  geom_point() +
+  geom_hline(yintercept = high_thresh, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = national_average, linetype = "solid", color = "black", size = 0.75) +
+  geom_hline(yintercept = very_high_thresh, linetype = "dashed", color = "darkred", size = 0.75) +
+  facet_wrap(~site_number) +
+  labs(title = "High Mortality Trends in Full Salmon Scotland Production Cycles 2018-2024",
+       x = "Date",
+       y = "Monthly Mortality (%)",
+       color = "Stock Cycle") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+      theme(legend.position = "right")+
+  theme(legend.position = "none")
+
+
+     
+    
+
+
+```
+
+### Check for policy SalScot
+
+
+```{r look-at-salscot-data-for-25-PEM-sites, fig.width=12, fig.height=12, echo=FALSE}
+
+PEM_site_numbers<-unique(towards_PEM_filtered$site_number)
+PEM_site_numbers
+
+PEM_filetered_pc_dat <- pc.dat %>% filter(site_number %in% PEM_site_numbers)
+
+write.csv(PEM_filetered_pc_dat, "./cross_checking_SalScotdata_for_PEMsites.csv", row.names = FALSE)
+subset_for_SVEPM_site_numbers<-unique(subset_for_SVEPM$site_number)
+
+SVEPM_filetered_pc_dat <- pc.dat %>% filter(site_number %in% subset_for_SVEPM_site_numbers)
+
+write.csv(SVEPM_filetered_pc_dat, "./cross_checking_SalScotdata_for_SVEPMsites.csv", row.names = FALSE)
+```
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(tidyr)
+library(DT)
+library(openxlsx)
+
+#library(shinydashboard)
+
+# ---- BACKGROUND DATA LOAD ----
+DATA_PATH <- "C:/Users/MoriartyM/Documents/Benchmark_Losses/data_for_app_development.csv"
+raw_data_bg <- reactiveVal(NULL)
+
+# ---- HELPER FUNCTION: DETECT STREAKS ----
+detect_streaks <- function(x, min_len = 2) {
+  r <- rle(x)
+  rep(r$lengths >= min_len & r$values, r$lengths)
+}
+# ---- HELPER FUNCTION: DETECT CAUSE STREAKS ----
+detect_cause_streaks <- function(x, min_len = 2) {
+  r <- rle(x)
+  rep(r$lengths >= min_len & r$values, r$lengths)
+}
+# ----- HELPER FUNCTION CAUSE-LEVEL STREAK DECTOR ----
+#04/02/2026#detect_streaks_cause <- function(x, min_len = 2) {
+#  r <- rle(x)
+#  rep(r$lengths >= min_len & r$values, r$lengths)
+#}
+# ----- HELPER FUNCTION CAUSE-LEVEL STREAK DETECTION - GAP AWARE----
+detect_streaks_cause <- function(flag, month_n, min_len = 2) {
+  
+  n <- length(flag)
+  out <- rep(FALSE, n)
+  
+  run_len <- 0
+  
+  for (i in seq_len(n)) {
+    
+    if (flag[i]) {
+      
+      # First TRUE
+      if (i == 1) {
+        run_len <- 1
+        
+      } else {
+        
+        # Check if previous month is consecutive
+        if (month_n[i] - month_n[i - 1] == 1) {
+          run_len <- run_len + 1
+        } else {
+          run_len <- 1
+        }
+      }
+      
+    } else {
+      run_len <- 0
+    }
+    
+    # Mark valid streaks
+    if (run_len >= min_len) {
+      
+      # Mark last min_len positions TRUE
+      idx <- (i - min_len + 1):i
+      out[idx] <- TRUE
+    }
+  }
+  
+  out
+}
+
+# ---- UI ----
+ui <- fluidPage(
+  titlePanel("Persistent Elevated Mortality (PEM) Decision Support Tool (Beta Version)"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput(
+        "mortality_thresh",
+        "Elevated Monthly Mortality Threshold (%)",
+        min = 0,
+        max = 20,
+        value = 5.5,
+        step = 0.25
+      ),
+      
+      sliderInput(
+        "streak_len",
+        "Minimum Consecutive Months (Streak Length)",
+        min = 2,
+        max = 6,
+        value = 2,
+        step = 1
+      ),
+      
+      sliderInput(
+        "min_pem_cycles",
+        "Minimum Cycles for REM/PEM",
+        min = 1,
+        max = 6,
+        value = 2,
+        step = 1
+      ),
+      
+      tags$hr(),
+      
+      downloadButton(
+        "export_regulator",
+        "Download Report"
+      )
+    ),
+    
+    mainPanel(
+      
+      fluidRow(
+        #column(4, wellPanel(h4("Sites Flagged as Recurrent Elevated Mortality (REM)"),
+        #                    textOutput("n_REM_sites"))),
+        column(4, wellPanel(h4("Total Sites"),
+                            textOutput("n_total_sites"))),
+        column(4, wellPanel(h4("REM Rate (%)"),
+                            textOutput("rem_rate"))), 
+        column(4, wellPanel(h4("PEM Rate (%)"),
+                            textOutput("pem_rate"))), 
+      ),
+      fluidRow(
+        column(3, uiOutput("rem_kpi")),
+        column(3, uiOutput("pem_kpi"))
+      ),
+      
+      
+      tabsetPanel(
+        tabPanel("REM Summary Table", tableOutput("summary_table")),
+        tabPanel("REM Mortality Plot", plotOutput("mortality_plot", height = "500px")),
+        #tabPanel("PEM Causes", plotOutput("pem_plot", height = "600px")),
+        #tabPanel("PEM Summary Table", tableOutput("pem_summary_table")), 
+        
+        #tabPanel("PEM by Operator", tableOutput("pem_operator_table")),
+        #tabPanel("PEM by Region", tableOutput("pem_region_table")),
+        
+        tabPanel("PEM Site Summary of Multifactorial Causes",
+                 
+                 h4("Persistent Causes (Filtered by Cycles)"),
+                 
+                 plotOutput("pem_plot", height = "500px"),
+                 
+                 tags$hr(),
+                 
+                 h4("Cause Summary"),
+                 tableOutput("pem_causes_table")
+        ),
+        
+        tabPanel("PEM Summary by Cause",
+                 
+                 h4("PEM Cause Classification"),
+                 tableOutput("pem_summary_table"),
+                 plotOutput("pem_summary_plot", height = "350px")
+        ),
+        
+        tabPanel("PEM Summary by Operator",
+                 
+                 tableOutput("pem_operator_table"),
+                 plotOutput("pem_operator_plot", height = "400px")
+        ),
+        
+        tabPanel("PEM Summary by Region",
+                 
+                 tableOutput("pem_region_table"),
+                 plotOutput("pem_region_plot", height = "400px")
+        ),
+        
+        
+        tabPanel("PEM Summary by Year",
+                 
+                 h4("PEM Cases per Year"),
+                 
+                 tableOutput("pem_year_table"),
+                 
+                 tags$hr(),
+                 
+                 plotOutput("pem_year_plot", height = "400px")
+        ),
+        
+        tabPanel("PEM Table", DT::DTOutput("pem_debug_table"))#,
+        #  tabPanel("PEM Debug", tableOutput("debug_pem"))
+        
+        
+        
+        
+      )
+      
+    )
+  )
+  
+)
+
+# ---- SERVER ----
+server <- function(input, output, session) {
+  
+  # Load data once
+  #observe({
+  #  df <- read.csv(DATA_PATH, stringsAsFactors = FALSE)
+  
+  #  df <- df %>%
+  #    mutate(
+  #      date = as.Date(date, format = "%d/%m/%Y"),
+  #      mortality_rate_final = as.numeric(mortality_rate_final)
+  #    )
+  
+  #  raw_data_bg(df)
+  #})
+  
+  observeEvent(TRUE, {
+    df <- read.csv(DATA_PATH, stringsAsFactors = FALSE)
+    
+    df <- df %>%
+      mutate(
+        date = as.Date(date, format = "%d/%m/%Y"),
+        mortality_rate_final = as.numeric(mortality_rate_final)
+      )
+    
+    raw_data_bg(df)
+  }, once = TRUE)
+  
+  
+  # ---- CORE REM CLASSIFICATION ----
+  classified_data <- reactive({
+    req(raw_data_bg())
+    
+    data <- raw_data_bg()
+    
+    # Step 1: Flag high events
+    data <- data %>%
+      mutate(high_event = mortality_rate_final >= input$mortality_thresh) %>% 
+      arrange(site_number, date) %>%
+      group_by(site_number) %>%
+      mutate(month_id = row_number()) %>%
+      ungroup()
+    
+    # Step 2: Within-cycle streaks (user-defined length)
+    data <- data %>%
+      arrange(site_number, stock_cycle, stock_cycle_month_n) %>%
+      group_by(site_number, stock_cycle) %>%
+      mutate(within_cycle_streak = detect_streaks(high_event, input$streak_len)) %>%
+      ungroup()
+    
+    # Step 3: Cycle-level summary
+    cycle_summary <- data %>%
+      group_by(site_number, stock_cycle) %>%
+      summarise(has_streak = any(within_cycle_streak, na.rm = TRUE),
+                .groups = "drop")
+    
+    # Step 4: Consecutive cycles with streaks (fixed at ≥2 for now)
+    cycle_summary <- cycle_summary %>%
+      arrange(site_number, stock_cycle) %>%
+      group_by(site_number) %>%
+      mutate(
+        cycle_num = as.numeric(factor(stock_cycle, levels = sort(unique(stock_cycle)))),
+        
+        streak_group = cumsum(!(has_streak & lag(has_streak, default = FALSE) &
+                                  (cycle_num - lag(cycle_num, default = cycle_num[1])) == 1)),
+        
+        streak_len = ave(has_streak, streak_group,
+                         FUN = function(x) if (all(!x)) 0 else sum(x)),
+        
+        consec_cycle_flag = has_streak & streak_len >= input$min_pem_cycles #2
+      ) %>%
+      ungroup()
+    
+    
+      # Step 5: Join back
+    data <- data %>%
+      left_join(
+        cycle_summary %>%
+          select(site_number, stock_cycle, consec_cycle_flag),
+        by = c("site_number", "stock_cycle")
+      )
+    
+    data
+  })
+  
+  # ---- SITE-LEVEL SUMMARY ----
+  summary_table_reactive <- reactive({
+    classified_data() %>%
+      
+      # Collapse to site level FIRST
+      group_by(site_number) %>%
+      summarise(
+        has_REM = any(consec_cycle_flag, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      
+      # Then assign category
+      mutate(
+        category = if_else(
+          has_REM,
+          "b. sites with REM cycles",
+          "a. sites with no REM cycles"
+        )
+      )
+  })
+  
+  REM_sites <- reactive({
+    summary_table_reactive() %>%
+      filter(category == "b. sites with REM cycles") %>%
+      pull(site_number) #%>%
+    # unique()
+  })
+  
+  
+  # ---- REM KPI OUTPUTS ----
+  
+  output$n_REM_sites <- renderText({
+    length(REM_sites())
+  })
+  
+  #  output$n_total_sites <- renderText({
+  #    length(unique(raw_data_bg()$site_number))
+  #  })
+  output$n_total_sites <- renderText({
+    req(raw_data_bg())
+    dplyr::n_distinct(raw_data_bg()$site_number)
+  })
+  
+  output$rem_rate <- renderText({
+    total <- length(unique(raw_data_bg()$site_number))
+    rem   <- length(REM_sites())
+    paste0(round(100 * rem / total, 1), "%")
+  })
+  
+  
+  
+  # ---- SUMMARY TABLE ----
+  
+  output$summary_table <- renderTable({
+    summary_table_reactive() %>%
+      count(category, name = "num_sites")
+  })
+  
+  # ---- PLOT ----
+  
+  output$mortality_plot <- renderPlot({
+    req(classified_data())
+    
+    plot_data <- classified_data() %>%
+      filter(site_number %in% REM_sites())
+    
+    ggplot(plot_data, aes(x = date, y = mortality_rate_final,
+                          color = factor(stock_cycle))) +
+      geom_point() +
+      geom_hline(yintercept = input$mortality_thresh,
+                 linetype = "dashed", color = "red") +
+      facet_wrap(~ site_number, scales = "free_x") +
+      labs(
+        title = "Sites Flagged with Recurring Elevated Mortality",
+        x = "Date",
+        y = "Monthly Mortality (%)",
+        color = "Stock Cycle"
+      ) +
+      theme_minimal() +
+      theme(legend.position = "none")
+  })
+  
+  # ---- HELPER: CLEAN & NORMALISE REASONS ----
+  clean_reason <- function(x) {
+    x %>%
+      stringr::str_split(";") %>%
+      purrr::map(~ stringr::str_trim(.x)) %>%
+      purrr::map(~ tolower(.x)) %>%
+      purrr::map(~ .x[!is.na(.x) & .x != ""]) %>%
+      purrr::map(~ sort(unique(.x))) %>%
+      purrr::map_chr(~ paste(.x, collapse = "; "))
+  }
+  
+  # ---- HIGH-LEVEL CATEGORY MAP ----
+  reason_category_map <- list(
+    "environmental" = "environmental",
+    "infectious diseases" = "infectious diseases",
+    "handling and treatment" = "handling and treatment",
+    "developmental" = "developmental",
+    "gill health related" = "gill health related",
+    "other" = "other"
+  )
+  
+  
+  
+  
+  # ---- PEM data ----
+  pem_data <- reactive({
+    req(classified_data(), REM_sites())
+    
+    classified_data() %>%
+      filter(
+        site_number %in% REM_sites(),
+        high_event == TRUE,
+        #within_cycle_streak == TRUE,
+        consec_cycle_flag == TRUE| 
+          lag(consec_cycle_flag, default = FALSE)
+      ) %>%
+      
+      # --- Combine & clean reasons (exactly same logic as fianl methods run) ---
+      mutate(
+        reason_combined = paste(top_cause_1, top_cause_2, top_cause_3, sep = "; "),
+        reason_combined = gsub("NA|^; |; NA", "", reason_combined),
+        reason_combined = tolower(trimws(reason_combined)),
+        reason_combined_clean = clean_reason(reason_combined)
+      ) %>%
+      
+      # --- Unnest causes + distribute mortality evenly ---
+      mutate(
+        reason_split = stringr::str_split(reason_combined_clean, ";\\s*"),
+        n_causes     = purrr::map_int(reason_split, length)
+      ) %>%
+      tidyr::unnest(reason_split) %>%
+      
+      mutate(
+        reason_split = tolower(stringr::str_trim(reason_split)),
+        high_level_reason = purrr::map_chr(
+          reason_split,
+          ~ reason_category_map[[.x]] %||% "other"
+        ),
+        shared_mortality_rate = mortality_rate_final / n_causes
+      ) %>%
+      
+      arrange(site_number, stock_cycle, date) %>%
+      group_by(site_number, stock_cycle, high_level_reason) %>%
+      mutate(
+        #cause_high_event = shared_mortality_rate > 0,
+        cause_high_event = mortality_rate_final >= input$mortality_thresh,
+        cause_streak = detect_cause_streaks(cause_high_event, input$streak_len)
+      ) %>%
+      ungroup()
+  })
+  # Identify cycles where each cause truely qualifies
+  pem_cause_cycles <- reactive({
+    req(pem_data())
+    
+    pem_data() %>%
+      group_by(site_number, stock_cycle, high_level_reason) %>%
+      summarise(
+        has_cause_streak = any(cause_streak, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      filter(has_cause_streak)
+  })
+  
+  # create threshold PEM base (mortality level + number of months)
+  #04/02/2026###
+  pem_data_thresh <- reactive({
+    req(pem_data(), input$mortality_thresh, input$streak_len)
+    
+    pem_data() %>%
+      mutate(
+        above_thresh = mortality_rate_final >= input$mortality_thresh
+      ) %>%
+      
+      arrange(site_number, stock_cycle, high_level_reason, stock_cycle_month_n) %>%
+      
+      group_by(site_number, stock_cycle, high_level_reason) %>%
+      
+      mutate(
+        cause_streak = detect_streaks_cause(
+          above_thresh,
+          stock_cycle_month_n,
+          input$streak_len
+        )
+      ) %>%
+      
+      ungroup() %>%
+      
+      filter(cause_streak == TRUE)
+  })
+  
+  #pem_data_thresh <- reactive({
+  # req(pem_data(), input$mortality_thresh, input$streak_len)
+  
+  #  pem_data() %>%
+  #   mutate(
+  #    above_thresh = shared_mortality_rate >= input$mortality_thresh
+  #  ) %>%
+  #   above_thresh = mortality_rate_final >= input$mortality_thresh
+  #) %>%
+  #    arrange(site_number, stock_cycle, high_level_reason, date) %>%
+  
+  #    group_by(site_number, stock_cycle, high_level_reason) %>%
+  
+  #   mutate(
+  #    cause_streak = detect_streaks_cause(above_thresh, input$streak_len)
+  # ) %>%
+  
+  #ungroup() %>%
+  
+  # Keep only months that are in valid streaks
+  #filter(cause_streak == TRUE)
+  #})
+  
+  
+  #04/02/2026#pem_data_thresh <- reactive({
+  # req(pem_data(), input$mortality_thresh)
+  
+  #pem_data() %>%
+  # filter(shared_mortality_rate >= input$mortality_thresh)
+  #})
+  
+  
+  # recompute persistent cause on threshold data 
+  pem_persistent_causes <- reactive({
+    req(pem_data_thresh())
+    
+    pem_data_thresh() %>%
+      group_by(site_number, high_level_reason) %>%
+      summarise(
+        num_cycles = n_distinct(stock_cycle),
+        .groups = "drop"
+      ) %>%
+      filter(num_cycles >= 2)
+  })
+  
+  # make sure consecutive cycles by cause
+  #04/02/2026# pem_persistent_causes <- reactive({
+  #  req(pem_cause_cycles())
+  
+  #  pem_cause_cycles() %>%
+  #    arrange(site_number, high_level_reason, stock_cycle) %>%
+  #    group_by(site_number, high_level_reason) %>%
+  #    mutate(
+  #      cycle_num = as.numeric(factor(stock_cycle, levels = sort(unique(stock_cycle)))),
+  #      cycle_gap = cycle_num - lag(cycle_num),
+  #      consec_cycle = if_else(!is.na(cycle_gap) & cycle_gap == 1, TRUE, FALSE)
+  #    ) %>%
+  #    summarise(
+  #      num_consec_pairs = sum(consec_cycle, na.rm = TRUE),
+  #      .groups = "drop"
+  #    ) %>%
+  #    filter(num_consec_pairs >= 1)
+  # })
+  # final pen site flags
+  pem_site_flags <- reactive({
+    req(pem_persistent_causes())
+    
+    pem_persistent_causes() %>%
+      group_by(site_number) %>%
+      summarise(
+        pem_flag = TRUE,
+        dominant_persistent_cause = paste(unique(high_level_reason), collapse = "; "),
+        .groups = "drop"
+      )
+  })
+  
+  
+  # ---- PEM summary ----
+  # pem_summary <- reactive({
+  #    pem_data() %>%
+  #      group_by(
+  #        site_number,
+  #        stock_cycle,
+  #        stock_cycle_month_n,
+  #        date,
+  #        high_level_reason
+  #      ) %>%
+  #      summarise(
+  #        total_mortality_rate = sum(mortality_rate_final, na.rm = TRUE),
+  #        cause_mortality_rate   = sum(shared_mortality_rate, na.rm = TRUE),
+  #        .groups = "drop"
+  #      )
+  # })
+  
+  # pem_summary <- reactive({
+  #    req(pem_summary())
+  
+  #    recurring_causes <- pem_summary() %>%
+  #      group_by(site_number, high_level_reason) %>%
+  #      summarise(
+  #        num_cycles = n_distinct(stock_cycle),
+  #        .groups = "drop"
+  #      ) %>%
+  #      filter(num_cycles >= 2)
+  #    
+  
+  #  pem_summary() %>%
+  #      inner_join(
+  #        recurring_causes %>%
+  #          select(site_number, high_level_reason),
+  #        by = c("site_number", "high_level_reason")
+  #      )
+  #  })
+  
+  
+  pem_display_data <- reactive({
+    req(pem_data(), pem_persistent_causes(), input$mortality_thresh)
+    
+    pem_data() %>%
+      inner_join(
+        pem_persistent_causes(),
+        by = c("site_number", "high_level_reason")
+      ) %>%
+      filter(mortality_rate_final >= input$mortality_thresh)
+  })
+  
+  # build pem summary for threshold data 
+  pem_persistent_causes <- reactive({
+    req(pem_data_thresh())
+    
+    pem_data_thresh() %>%
+      group_by(site_number, high_level_reason) %>%
+      summarise(
+        num_cycles = n_distinct(stock_cycle),
+        .groups = "drop"
+      ) %>%
+      filter(num_cycles >= 2)
+  })
+  
+  ## 04/02/2026 pem_summary <- reactive({
+  #req(pem_display_data())
+  
+  #  pem_display_data() %>%
+  #    group_by(
+  #      site_number,
+  #      stock_cycle,
+  #      stock_cycle_month_n,
+  #      high_level_reason
+  #    ) %>%
+  #    summarise(
+  #      avg_mortality_rate = mean(shared_mortality_rate, na.rm = TRUE),
+  #      total_mortality_rate = sum(shared_mortality_rate, na.rm = TRUE),
+  #      n_months             = dplyr::n(),
+  #      .groups = "drop"
+  #    )
+  #})
+  
+  
+  #---- PEM plot ---- not using this version as it has all causes not just PEM related ones
+  # output$pem_plot <- renderPlot({
+  #    req(pem_summary())
+  
+  #    ggplot(pem_summary(), aes(
+  #      x    = factor(stock_cycle),
+  #      y    = avg_mortality_rate,
+  #      fill = high_level_reason
+  #    )) +
+  #      geom_col() +
+  #      facet_wrap(~ site_number, scales = "free_x") +
+  #     scale_fill_brewer(palette = "Set2", name = "Mortality Cause (High Level)") +
+  #      labs(
+  #        title = "High-Level Causes per Stock Cycle (PEM Layer)",
+  #        x     = "Stock Cycle",
+  #        y     = "Avg Mortality Rate (%)"
+  #      ) +
+  #      theme_minimal(base_size = 12) +
+  #      theme(
+  #        axis.text.x   = element_text(angle = 45, hjust = 1),
+  #        legend.position = "bottom"
+  #      )
+  #  })
+  
+  #---- PEM TABLE ----
+  ###  output$pem_table <- renderTable({
+  ###    pem_summary() %>%
+  ###      arrange(site_number, desc(cause_mortality_rate))
+  ###  })
+  #--- Dominant case in PEM Cycles -----
+  #  pem_dominant_cause <- reactive({
+  #   req(pem_summary())
+  
+  #    pem_summary() %>%
+  #     group_by(site_number, stock_cycle, high_level_reason) %>%
+  #     summarise(
+  #      cycle_mortality = sum(cause_mortality_rate , na.rm = TRUE),
+  #      .groups = "drop"
+  #    ) %>%
+  #    group_by(site_number, stock_cycle) %>%
+  #    slice_max(order_by = cycle_mortality, n = 1, with_ties = TRUE) %>%
+  #    ungroup()
+  # })
+  
+  # update PEM summary 
+  pem_summary <- reactive({
+    req(pem_data_thresh(), pem_persistent_causes())
+    
+    pem_data_thresh() %>%
+      inner_join(
+        pem_persistent_causes(),
+        by = c("site_number", "high_level_reason")
+      ) %>%
+      
+      group_by(
+        site_number,
+        year,
+        stock_cycle,
+        high_level_reason
+      ) %>%
+      
+      summarise(
+        avg_mortality_rate   = mean(mortality_rate_final), # check this works 04/02/2026
+        total_mortality_rate = sum(shared_mortality_rate), ## check this works 04/02/2026
+        n_months             = n(),
+        .groups = "drop"
+      )
+  })
+  
+  
+  
+  # rebuild dominant cause from summary data
+  pem_dominant_cause <- reactive({
+    req(pem_summary())
+    
+    pem_summary() %>%
+      group_by(site_number, stock_cycle, high_level_reason) %>%
+      summarise(
+        cycle_mortality = sum(total_mortality_rate),
+        .groups = "drop"
+      ) %>%
+      group_by(site_number, stock_cycle) %>%
+      slice_max(cycle_mortality, n = 1, with_ties = FALSE) %>%
+      ungroup()
+  })
+  
+  
+  # ---- PEM Logic ------ "A cause is persistent if it appears with meaningful mortality in ≥ 2 REM cycles"
+  
+  pem_site_flags <- reactive({
+    req(pem_dominant_cause())
+    
+    pem_dominant_cause() %>%
+      group_by(site_number, high_level_reason) %>%
+      summarise(
+        num_cycles = n_distinct(stock_cycle),
+        .groups = "drop"
+      ) %>%
+      group_by(site_number) %>%
+      summarise(
+        pem_flag = any(num_cycles >= 2),
+        dominant_persistent_cause = paste(
+          high_level_reason[num_cycles >= 2],
+          collapse = "; "
+        ),
+        .groups = "drop"
+      )
+  })
+  
+  
+  # o4/02/2024 pem_site_flags <- reactive({
+  #    req(pem_persistent_causes())
+  
+  #   pem_persistent_causes() %>%
+  #    group_by(site_number) %>%
+  #   summarise(
+  #    pem_flag = TRUE,
+  #   dominant_persistent_cause = paste(unique(high_level_reason), collapse = "; "),
+  #  .groups = "drop"
+  #  )
+  #  })
+  
+  # pem_site_flags <- reactive({
+  #   req(pem_summary())
+  
+  #   pem_summary() %>%
+  #     group_by(site_number, stock_cycle, high_level_reason) %>%
+  #    summarise(
+  #      cycle_mortality = sum(cause_mortality_rate, na.rm = TRUE),
+  #      .groups = "drop"
+  #    ) %>%
+  #    filter(cycle_mortality > 0) %>%
+  #    group_by(site_number, high_level_reason) %>%
+  #    summarise(
+  #     num_cycles = n_distinct(stock_cycle),
+  #      .groups = "drop"
+  #    ) %>%
+  #    group_by(site_number) %>%
+  #    summarise(
+  #      pem_flag = any(num_cycles >= 2),
+  #      dominant_persistent_cause = paste(
+  #        high_level_reason[num_cycles >= 2],
+  #       collapse = "; "
+  #      ),
+  #     .groups = "drop"
+  #    )
+  # })
+  
+  
+  
+  
+  # ---- PEM Join to main df -----
+  #classified_with_pem <- reactive({
+  #  req(classified_data(), pem_site_flags())
+  
+  #   classified_data() %>%
+  #     left_join(pem_site_flags(), by = "site_number") %>%
+  #     mutate(
+  #       pem_flag = ifelse(is.na(pem_flag), FALSE, pem_flag),
+  #       pem_category = case_when(
+  #          pem_flag ~ "c. sites with PEM (persistent cause)",
+  #         consec_cycle_flag ~ "b. sites with REM cycles",
+  #         TRUE ~ "a. sites with no REM cycles"
+  #       )
+  #     )
+  #  })
+  classified_with_pem <- reactive({
+    req(classified_data(), pem_site_flags())
+    
+    classified_data() %>%
+      left_join(pem_site_flags(), by = "site_number") %>%
+      mutate(
+        pem_flag = if_else(is.na(pem_flag), FALSE, pem_flag),
+        pem_category = case_when(
+          pem_flag ~ "c. sites with PEM (persistent cause)",
+          consec_cycle_flag ~ "b. sites with REM cycles",
+          TRUE ~ "a. sites with no REM cycles"
+        )
+      )
+  })
+  
+  # ---- PEM Summary Table (No Double Counting) -----
+  #  pem_summary_table <- reactive({
+  #    classified_with_pem() %>%
+  #      distinct(site_number, pem_category, pem_flag) %>%
+  #      count(pem_category, name = "num_sites") %>%
+  #      arrange(pem_category)
+  #  })
+  
+  #output$pem_summary_table <- renderTable({
+  #req(pem_site_flags())
+  
+  #  pem_site_flags() %>%
+  #    count(pem_flag, name = "num_sites") %>%
+  #    mutate(
+  #      pem_category = if_else(pem_flag, "c. sites with PEM", "other")
+  #    )
+  #})
+  pem_summary_table <- reactive({
+    req(pem_summary())
+    
+    pem_summary() %>%
+      distinct(site_number, high_level_reason) %>%
+      count(high_level_reason, name = "num_site_cause_pairs") %>%
+      arrange(desc(num_site_cause_pairs))
+  })
+  
+  output$pem_summary_table <- renderTable({
+    pem_summary_table()
+  })
+  
+  
+  #----   PEM Sites Table (For Expert Review) ----
+  # output$pem_sites_table <- DT::renderDT({
+  #    req(pem_site_flags())
+  
+  #    pem_site_flags() %>%
+  #      filter(pem_flag == TRUE) %>%
+  #     arrange(site_number) %>%
+  #    datatable(
+  #     options = list(pageLength = 10),
+  #    rownames = FALSE
+  #  )
+  #})
+  
+  # ---- PEM Plot (Only Persistent-Cause Cycles) ----
+  #output$pem_plot <- renderPlot({
+  #  req(pem_summary(), pem_site_flags())
+  
+  #  pem_sites <- pem_site_flags() %>%
+  #    filter(pem_flag) %>%
+  #    pull(site_number)
+  
+  #  persistent_causes <- pem_site_flags() %>%
+  #   filter(pem_flag) %>%
+  #  separate_rows(dominant_persistent_cause, sep = ";\\s*") %>%
+  # rename(high_level_reason = dominant_persistent_cause)
+  
+  #plot_data <- pem_summary() %>%
+  #  filter(site_number %in% pem_sites) %>%
+  #  inner_join(
+  #    persistent_causes,
+  #    by = c("site_number", "high_level_reason")
+  #  )
+  
+  #  ggplot(plot_data, aes(
+  #   x = factor(stock_cycle),
+  #  y = cause_mortality_rate,
+  #  fill = high_level_reason
+  #)) +
+  #  geom_col() +
+  #  facet_wrap(~ site_number, scales = "free_x") +
+  #  scale_fill_brewer(palette = "Set2", name = "Persistent Cause") +
+  #  labs(
+  #    title = "Persistent Elevated Mortality (PEM) — Dominant Causes",
+  #    x = "Stock Cycle",
+  #    y = "Avg Mortality Rate (%)"
+  #  ) +
+  #  theme_minimal(base_size = 12) +
+  #  theme(
+  #    axis.text.x = element_text(angle = 45, hjust = 1),
+  #    legend.position = "bottom"
+  #  )
+  #  })
+  
+  output$pem_plot <- renderPlot({
+    req(pem_summary())
+    
+    ggplot(pem_summary(), aes(
+      x = factor(stock_cycle),
+      y = avg_mortality_rate,
+      fill = high_level_reason
+    )) +
+      geom_col() +
+      facet_wrap(~ site_number, scales = "free_x") +
+      scale_fill_brewer(palette = "Set2", name = "Persistent Cause") +
+      labs(
+        title = "Persistent Elevated Mortality (PEM) — Causes",
+        x = "Stock Cycle",
+        y = "Avg Mortality Rate (%)"
+      ) +
+      theme_minimal(base_size = 12) +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom"
+      )
+  })
+  # --- add summary table --- 05/02/2026
+  pem_causes_summary <- reactive({
+    req(pem_summary())
+    
+    pem_summary() %>%
+      group_by(high_level_reason) %>%
+      summarise(
+        num_cases = n(),
+        num_sites = n_distinct(site_number),
+        .groups = "drop"
+      ) %>%
+      arrange(desc(num_cases))
+  })
+  
+  output$pem_causes_table <- renderTable({
+    pem_causes_summary()
+  })
+  # --- create yearly summary table ----
+  pem_by_year <- reactive({
+    req(pem_summary())
+    
+    pem_summary() %>%
+      group_by(year) %>%
+      summarise(
+        num_cases = n(),
+        num_sites = n_distinct(site_number),
+        .groups = "drop"
+      ) %>%
+      arrange(year)
+  })
+  
+  output$pem_year_table <- renderTable({
+    pem_by_year()
+  })
+  
+  pem_by_year_cause <- reactive({
+    req(pem_summary())
+    
+    pem_summary() %>%
+      group_by(year, high_level_reason) %>%
+      summarise(
+        num_cases = n(),
+        num_sites = n_distinct(site_number),
+        .groups = "drop"
+      ) %>%
+      arrange(year)
+  })
+  
+  
+  output$pem_year_plot <- renderPlot({
+    req(pem_by_year_cause())
+    
+    ggplot(pem_by_year_cause(),
+           aes(x = year, y = num_cases, fill = high_level_reason)) +
+      geom_col() +
+      labs(
+        title = "PEM Cases per Year",
+        x = "Year",
+        y = "Number of PEM Cases"
+      ) +
+      theme_minimal(base_size = 20)
+  })
+  
+  
+  #--- temp debug PEM ---
+  
+  pem_debug_cycles <- reactive({
+    req(pem_summary())
+    
+    pem_summary() %>%
+      group_by(site_number, stock_cycle, high_level_reason) %>%
+      summarise(
+        total_cycle_mortality = sum(cause_mortality_rate, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      arrange(site_number, stock_cycle, desc(total_cycle_mortality))
+  })
+  
+  # ---- KPI Value Boxes (REM + PEM)
+  output$rem_kpi <- renderUI({
+    div(
+      style = "
+      background-color: #f0ad4e;
+      color: white;
+      padding: 15px;
+      border-radius: 8px;
+      text-align: center;
+      font-size: 18px;",
+      h3(length(REM_sites())),
+      p("Sites with model indicating REM")
+    )
+  })
+  
+  output$pem_kpi <- renderUI({
+    req(pem_site_flags())
+    
+    div(
+      style = "
+      background-color: #d9534f;
+      color: white;
+      padding: 15px;
+      border-radius: 8px;
+      text-align: center;
+      font-size: 18px;",
+      h3(sum(pem_site_flags()$pem_flag, na.rm = TRUE)),
+      p("Sites with model indicating PEM")
+    )
+  })
+  # debug render PEM
+  # output$pem_debug_table <- DT::renderDT({
+  #   req(pem_debug_cycles())
+  
+  #   pem_debug_cycles() %>%
+  #     datatable(
+  #       options = list(pageLength = 25),
+  #       rownames = FALSE
+  #    )
+  # })
+  output$pem_debug_table <- DT::renderDT({
+    req(pem_data())
+    
+    pem_data() %>%
+      filter(cause_streak) %>%
+      select(
+        site_number,
+        stock_cycle,
+        stock_cycle_month_n,
+        date,
+        high_level_reason,
+        shared_mortality_rate,
+        mortality_rate_final#,
+        # cause_streak
+      ) %>%
+      arrange(site_number, stock_cycle,stock_cycle_month_n, high_level_reason, date) %>%
+      datatable(options = list(pageLength = 25), rownames = FALSE)
+  })
+  
+  output$debug_pem <- renderTable({
+    
+    pem_data() %>%
+      mutate(
+        above = shared_mortality_rate >= input$mortality_thresh
+      ) %>%
+      
+      arrange(site_number, stock_cycle, high_level_reason, stock_cycle_month_n) %>%
+      
+      group_by(site_number, stock_cycle, high_level_reason) %>%
+      
+      mutate(
+        cause_streak = detect_streaks_cause(
+          above,
+          stock_cycle_month_n,
+          input$streak_len
+        )
+      ) %>%
+      
+      ungroup() %>%
+      
+      select(
+        site_number,
+        stock_cycle,
+        stock_cycle_month_n,
+        date,
+        high_level_reason,
+        shared_mortality_rate,
+        above,
+        cause_streak
+      )
+  })
+  
+  # observe({
+  #    cat("PEM sites (truth):", nrow(pem_site_flags()), "\n")
+  #   cat("PEM sites (display):",
+  #        dplyr::n_distinct(pem_summary()$site_number), "\n")
+  #  })
+  observe({
+    cat("PEM sites (dynamic):",
+        sum(pem_site_flags()$pem_flag, na.rm = TRUE),
+        "\n")
+  })
+  # temp debug table 2 
+  #02/04/2026
+  #output$debug_pem <- renderTable({
+  #   pem_data_thresh() %>%
+  #     count(site_number, stock_cycle, high_level_reason)
+  # })
+  # ----additional PEM inference ----
+  #  classified_with_pem() %>%
+  #   filter(pem_flag == TRUE) %>%
+  #  distinct(site_number, operator, region_grouped)
+  
+  pem_by_operator <- reactive({
+    req(classified_with_pem())
+    
+    classified_with_pem() %>%
+      filter(pem_flag == TRUE) %>%
+      distinct(site_number, operator) %>%
+      count(operator, name = "num_sites") %>%
+      arrange(desc(num_sites))
+  })
+  
+  pem_by_region <- reactive({
+    req(classified_with_pem())
+    
+    classified_with_pem() %>%
+      filter(pem_flag == TRUE) %>%
+      distinct(site_number, region_grouped) %>%
+      count(region_grouped, name = "num_sites") %>%
+      arrange(desc(num_sites))
+  })
+  
+  output$pem_operator_table <- renderTable({
+    pem_by_operator()
+  })
+  
+  output$pem_region_table <- renderTable({
+    pem_by_region()
+  })
+  # ---- visualise PEM tables ----
+  output$pem_summary_plot <- renderPlot({
+    req(pem_summary_table())
+    
+    ggplot(pem_summary_table(),
+           # aes(x = pem_category, y = num_sites)) +
+           aes(x=high_level_reason, y=num_site_cause_pairs))+
+      geom_col() +
+      labs(
+        title = "Sites by PEM Classification",
+        x = "Classification",
+        y = "Number of Sites"
+      ) +
+      theme_minimal(base_size = 20) +
+      theme(
+        axis.text.x = element_text(angle = 30, hjust = 1)
+      )
+  })
+  
+  output$pem_operator_plot <- renderPlot({
+    req(pem_by_operator())
+    
+    ggplot(pem_by_operator(),
+           aes(x = reorder(operator, num_sites),
+               y = num_sites)) +
+      geom_col() +
+      coord_flip() +
+      labs(
+        title = "PEM Sites by Operator",
+        x = "Operator",
+        y = "Number of Sites"
+      ) +
+      theme_minimal(base_size = 20)
+  })
+  output$pem_region_plot <- renderPlot({
+    req(pem_by_region())
+    
+    ggplot(pem_by_region(),
+           aes(x = reorder(region_grouped, num_sites),
+               y = num_sites)) +
+      geom_col() +
+      coord_flip() +
+      labs(
+        title = "PEM Sites by Region",
+        x = "Region",
+        y = "Number of Sites"
+      ) +
+      theme_minimal(base_size = 20)
+  })
+  
+  
+  # ----PEM KPI OUTPUTS ----
+  PEM_sites <- reactive({
+    classified_with_pem() %>%
+      filter(pem_category == "c. sites with PEM (persistent cause)") %>%
+      pull(site_number) %>%
+      unique()
+  })
+  output$n_PEM_sites <- renderText({
+    length(PEM_sites())
+  })
+  output$pem_rate <- renderText({
+    total <- length(unique(raw_data_bg()$site_number))
+    pem   <- length(PEM_sites())
+    paste0(round(100 * pem / total, 1), "%")
+  })
+  
+  output$export_regulator <- downloadHandler(
+    
+    filename = function() {
+      paste0(
+        "PEM_Report_",
+        Sys.Date(),
+        ".xlsx"
+      )
+    },
+    
+    content = function(file) {
+      
+      wb <- openxlsx::createWorkbook()
+      
+      
+      # ---- Sheet 1: Site Classifications ----
+      openxlsx::addWorksheet(wb, "Site_Classification")
+      
+      openxlsx::writeData(
+        wb,
+        "Site_Classification",
+        classified_with_pem() %>%
+          distinct(
+            site_number,
+            operator,
+            region_grouped,
+            pem_category,
+            pem_flag
+          )
+      )
+      
+      
+      # ---- Sheet 2: PEM Summary ----
+      openxlsx::addWorksheet(wb, "PEM_Summary")
+      
+      openxlsx::writeData(
+        wb,
+        "PEM_Summary",
+        pem_summary_table()
+      )
+      
+      
+      # ---- Sheet 3: Operator Summary ----
+      openxlsx::addWorksheet(wb, "By_Operator")
+      
+      openxlsx::writeData(
+        wb,
+        "By_Operator",
+        pem_by_operator()
+      )
+      
+      
+      # ---- Sheet 4: Region Summary ----
+      openxlsx::addWorksheet(wb, "By_Region")
+      
+      openxlsx::writeData(
+        wb,
+        "By_Region",
+        pem_by_region()
+      )
+      
+      
+      # ---- Sheet 5: Persistent Causes ----
+      openxlsx::addWorksheet(wb, "Persistent_Causes")
+      
+      openxlsx::writeData(
+        wb,
+        "Persistent_Causes",
+        pem_site_flags() %>%
+          filter(pem_flag) %>%
+          arrange(site_number)
+      )
+      
+      
+      # Save
+      openxlsx::saveWorkbook(wb, file, overwrite = TRUE)
+    }
+  )
+  
+}
+
+shinyApp(ui, server)
